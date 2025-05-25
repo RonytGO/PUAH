@@ -9,7 +9,7 @@ app.get("/", async (req, res) => {
 
   console.log("▶️ Received request. Total:", total);
 
-  const goodURL = `https://puah.tfaforms.net/17?ref=${encodeURIComponent(ref)}`; // <-- Replace 12345 with your real form ID
+  const goodURL = `https://puah.tfaforms.net/17?ref=${encodeURIComponent(ref)}`; // D
 
   const payload = {
     terminal: "0882577012",
