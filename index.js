@@ -1,4 +1,3 @@
-
 const express = require("express");
 const fetch = require("node-fetch");
 
@@ -6,7 +5,11 @@ const app = express();
 
 app.get("/", async (req, res) => {
   const total = req.query.total || "1100";
+  const ref = req.query.ref || ""; // Optional: track original submission or user
+
   console.log("▶️ Received request. Total:", total);
+
+  const goodURL = `https://puah.tfaforms.net/17?ref=${encodeURIComponent(ref)}`; // <-- Replace 12345 with your real form ID
 
   const payload = {
     terminal: "0882577012",
@@ -17,7 +20,7 @@ app.get("/", async (req, res) => {
     FreeTotal: "False",
     ShopNo: "001",
     Total: total,
-    GoodURL: "https://puahlimudim.org.il/",
+    GoodURL: goodURL,
     NotificationGoodMail: "ronyt@puah.org.il"
   };
 
@@ -29,21 +32,22 @@ app.get("/", async (req, res) => {
     });
 
     const data = await peleRes.json();
-    console.log("📩 Pelecard response:", data);
+    console.log("Pelecard response:", data);
 
     if (data.URL) {
       return res.redirect(data.URL);
     } else {
-      console.error("❌ Pelecard error:", data);
+      console.error("Pelecard error:", data);
       return res.status(500).send("Pelecard error: " + JSON.stringify(data));
     }
+
   } catch (err) {
-    console.error("🔥 Server error:", err);
+    console.error("Server error:", err);
     return res.status(500).send("Server error: " + err.message);
   }
 });
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => {
-  console.log("🚀 Server is listening on port", port);
+  console.log("Server is listening on port", port);
 });
