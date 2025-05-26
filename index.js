@@ -11,18 +11,20 @@ app.get("/", async (req, res) => {
 
   const goodURL = `https://puah.tfaforms.net/17?ref=${encodeURIComponent(ref)}`; // D
 
-  const payload = {
-    terminal: "0882577012",
-    user: "TestYotam",
-    password: "TestYotam1",
-    ActionType: "J4",
-    Currency: "1",
-    FreeTotal: "False",
-    ShopNo: "001",
-    Total: total,
-    GoodURL: goodURL,
-    NotificationGoodMail: "ronyt@puah.org.il"
-  };
+const payload = {
+  terminal: "0882577012",
+  user: "TestYotam",
+  password: "TestYotam1",
+  ActionType: "J4",
+  Currency: "1",
+  FreeTotal: "False",
+  ShopNo: "001",
+  Total: total,
+  GoodURL: goodURL,
+  NotificationGoodMail: "ronyt@puah.org.il",
+  ParamX: "Merkaz Limud"
+};
+
 
   try {
     const peleRes = await fetch("https://gateway21.pelecard.biz/PaymentGW/init", {
