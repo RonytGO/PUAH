@@ -4,7 +4,7 @@ const fetch = require("node-fetch");
 const app = express();
 
 app.get("/", async (req, res) => {
-  const total = req.query.total || "1100";
+  const total = req.query.total || "6500";
   const ref = req.query.ref || ""; // Optional: track original submission or user
 
   console.log("▶️ Received request. Total:", total);
