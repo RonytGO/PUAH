@@ -7,7 +7,7 @@ app.get("/", async (req, res) => {
   const total = req.query.total || "6500";
   const FAResponseID = req.query.FAResponseID || "";
 
-   const goodURL = `https://puah.tfaforms.net/17?tfa_10=${encodeURIComponent(FAResponseID)}`;
+   const goodURL = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}`;
 
   
   console.log("Received request. Total:", total);
