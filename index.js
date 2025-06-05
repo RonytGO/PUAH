@@ -5,12 +5,14 @@ const app = express();
 
 app.get("/", async (req, res) => {
   const total = req.query.total || "6500";
-  const ref = req.query.ref || ""; // Optional: track original submission or user
+  const FAResponseID = req.query.FAResponseID || "";
 
-  console.log("▶️ Received request. Total:", total);
+  const goodURL = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}`;
 
-  const goodURL = `https://puah.tfaforms.net/17?ref=${encodeURIComponent(ref)}`; // D
+  
+  console.log("Received request. Total:", total);
 
+ 
 const payload = {
   terminal: "0882577012",
   user: "TestYotam",
