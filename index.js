@@ -7,26 +7,21 @@ app.get("/", async (req, res) => {
   const total = req.query.total || "6500";
   const FAResponseID = req.query.FAResponseID || "";
 
-   const goodURL = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}`;
-
-  
   console.log("Received request. Total:", total);
 
- 
-const payload = {
-  terminal: "0882577012",
-  user: "TestYotam",
-  password: "TestYotam1",
-  ActionType: "J4",
-  Currency: "1",
-  FreeTotal: "False",
-  ShopNo: "001",
-  Total: total,
-  GoodURL: goodURL,
-  NotificationGoodMail: "ronyt@puah.org.il",
-  ParamX: "Merkaz Limud"
-};
-
+  const payload = {
+    terminal: "0882577012",
+    user: "TestYotam",
+    password: "TestYotam1",
+    ActionType: "J4",
+    Currency: "1",
+    FreeTotal: "False",
+    ShopNo: "001",
+    Total: total,
+    GoodURL: "https://placeholder.com", // placeholder, replaced dynamically after response
+    NotificationGoodMail: "ronyt@puah.org.il",
+    ParamX: "Merkaz Limud"
+  };
 
   try {
     const peleRes = await fetch("https://gateway21.pelecard.biz/PaymentGW/init", {
@@ -39,7 +34,11 @@ const payload = {
     console.log("Pelecard response:", data);
 
     if (data.URL) {
-      return res.redirect(data.URL);
+      // Build GoodURL with returned Pelecard data
+      const goodURL = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}&TransactionId=${encodeURIComponent(data.TransactionId || "")}&ConfirmationKey=${encodeURIComponent(data.ConfirmationKey || "")}&Status=${encodeURIComponent(data.Status || "")}&Total=${encodeURIComponent(total)}&ParamX=${encodeURIComponent(payload.ParamX)}`;
+
+      console.log("Redirecting to:", goodURL);
+      return res.redirect(goodURL);
     } else {
       console.error("Pelecard error:", data);
       return res.status(500).send("Pelecard error: " + JSON.stringify(data));
