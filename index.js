@@ -4,15 +4,24 @@ const fetch = require("node-fetch");
 const app = express();
 
 app.get("/", async (req, res) => {
-  const total = req.query.total || "6500";
+  const total        = req.query.total || "6500";
   const FAResponseID = req.query.FAResponseID || "";
-  const paramX = "Merkaz Limud";
+  const paramX       = "Merkaz Limud";
 
-  // Build the URLs that Pelecard will redirect to on success or failure
-  const successURL = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}&Total=${encodeURIComponent(total)}&ParamX=${encodeURIComponent(paramX)}&Status=approved`;
-  const errorURL   = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}&Total=${encodeURIComponent(total)}&ParamX=${encodeURIComponent(paramX)}&Status=failed`;
+  // Build two URLs — one for success, one for failure
+  const successURL = `https://puah.tfaforms.net/17` +
+    `?FAResponseID=${encodeURIComponent(FAResponseID)}` +
+    `&Total=${encodeURIComponent(total)}` +
+    `&ParamX=${encodeURIComponent(paramX)}` +
+    `&Status=approved`;
 
-  console.log("Received request. Total:", total, "FAResponseID:", FAResponseID);
+  const errorURL = `https://puah.tfaforms.net/17` +
+    `?FAResponseID=${encodeURIComponent(FAResponseID)}` +
+    `&Total=${encodeURIComponent(total)}` +
+    `&ParamX=${encodeURIComponent(paramX)}` +
+    `&Status=failed`;
+
+  console.log("Received request – total:", total, "FAResponseID:", FAResponseID);
 
   const payload = {
     terminal: "0882577012",
@@ -23,8 +32,8 @@ app.get("/", async (req, res) => {
     FreeTotal: "False",
     ShopNo: "001",
     Total: total,
-    GoodURL: successURL,       // Redirect here on payment success
-    ErrorURL: errorURL,        // Redirect here on payment failure
+    GoodURL: successURL,      // Pelecard will redirect here on success
+    ErrorURL: errorURL,       // …or here on failure
     NotificationGoodMail: "ronyt@puah.org.il",
     NotificationErrorMail: "ronyt@puah.org.il",
     ParamX: paramX
@@ -36,17 +45,16 @@ app.get("/", async (req, res) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-
     const data = await peleRes.json();
-    console.log("Pelecard response:", data);
+    console.log("Pelecard init response:", data);
 
     if (data.URL) {
-      return res.redirect(data.URL); // Show Pelecard’s payment iframe/page
+      // Send the user to Pelecard's payment page
+      return res.redirect(data.URL);
     } else {
       console.error("Pelecard error:", data);
       return res.status(500).send("Pelecard error: " + JSON.stringify(data));
     }
-
   } catch (err) {
     console.error("Server error:", err);
     return res.status(500).send("Server error: " + err.message);
@@ -55,5 +63,5 @@ app.get("/", async (req, res) => {
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => {
-  console.log("Server is listening on port", port);
+  console.log("Listening on port", port);
 });
