@@ -9,6 +9,9 @@ app.get("/", async (req, res) => {
 
   console.log("Received request. Total:", total);
 
+  // First build the GoodURL (used by Pelecard AFTER payment)
+  const goodURL = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}&Total=${encodeURIComponent(total)}&ParamX=Merkaz%20Limud`;
+
   const payload = {
     terminal: "0882577012",
     user: "TestYotam",
@@ -18,7 +21,7 @@ app.get("/", async (req, res) => {
     FreeTotal: "False",
     ShopNo: "001",
     Total: total,
-    GoodURL: "https://placeholder.com", // placeholder, replaced dynamically after response
+    GoodURL: goodURL, // Only used by Pelecard after successful payment
     NotificationGoodMail: "ronyt@puah.org.il",
     ParamX: "Merkaz Limud"
   };
@@ -34,11 +37,8 @@ app.get("/", async (req, res) => {
     console.log("Pelecard response:", data);
 
     if (data.URL) {
-      // Build GoodURL with returned Pelecard data
-      const goodURL = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}&TransactionId=${encodeURIComponent(data.TransactionId || "")}&ConfirmationKey=${encodeURIComponent(data.ConfirmationKey || "")}&Status=${encodeURIComponent(data.Status || "")}&Total=${encodeURIComponent(total)}&ParamX=${encodeURIComponent(payload.ParamX)}`;
-
-      console.log("Redirecting to:", goodURL);
-      return res.redirect(goodURL);
+      // Redirect the user to the Pelecard payment page
+      return res.redirect(data.URL);
     } else {
       console.error("Pelecard error:", data);
       return res.status(500).send("Pelecard error: " + JSON.stringify(data));
