@@ -6,11 +6,13 @@ const app = express();
 app.get("/", async (req, res) => {
   const total = req.query.total || "6500";
   const FAResponseID = req.query.FAResponseID || "";
+  const paramX = "Merkaz Limud";
 
-  console.log("Received request. Total:", total);
+  // Build the URLs that Pelecard will redirect to on success or failure
+  const successURL = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}&Total=${encodeURIComponent(total)}&ParamX=${encodeURIComponent(paramX)}&Status=approved`;
+  const errorURL   = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}&Total=${encodeURIComponent(total)}&ParamX=${encodeURIComponent(paramX)}&Status=failed`;
 
-  // First build the GoodURL (used by Pelecard AFTER payment)
-  const goodURL = `https://puah.tfaforms.net/17?FAResponseID=${encodeURIComponent(FAResponseID)}&Total=${encodeURIComponent(total)}&ParamX=Merkaz%20Limud`;
+  console.log("Received request. Total:", total, "FAResponseID:", FAResponseID);
 
   const payload = {
     terminal: "0882577012",
@@ -21,9 +23,11 @@ app.get("/", async (req, res) => {
     FreeTotal: "False",
     ShopNo: "001",
     Total: total,
-    GoodURL: goodURL, // Only used by Pelecard after successful payment
+    GoodURL: successURL,       // Redirect here on payment success
+    ErrorURL: errorURL,        // Redirect here on payment failure
     NotificationGoodMail: "ronyt@puah.org.il",
-    ParamX: "Merkaz Limud"
+    NotificationErrorMail: "ronyt@puah.org.il",
+    ParamX: paramX
   };
 
   try {
@@ -37,8 +41,7 @@ app.get("/", async (req, res) => {
     console.log("Pelecard response:", data);
 
     if (data.URL) {
-      // Redirect the user to the Pelecard payment page
-      return res.redirect(data.URL);
+      return res.redirect(data.URL); // Show Pelecard’s payment iframe/page
     } else {
       console.error("Pelecard error:", data);
       return res.status(500).send("Pelecard error: " + JSON.stringify(data));
