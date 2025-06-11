@@ -24,9 +24,9 @@ app.get("/", async (req, res) => {
   console.log("Received request – total:", total, "FAResponseID:", FAResponseID);
 
   const payload = {
-    terminal: "0882577012",
-    user: "TestYotam",
-    password: "TestYotam1",
+    terminal: process.env.PELE_TERMINAL,
+    user:     process.env.PELE_USER,
+    password: process.env.PELE_PASSWORD,
     ActionType: "J4",
     Currency: "1",
     FreeTotal: "False",
