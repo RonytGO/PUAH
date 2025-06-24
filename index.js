@@ -36,7 +36,14 @@ app.get("/", async (req, res) => {
     ErrorURL: errorURL,       // …or here on failure
     NotificationGoodMail: "ronyt@puah.org.il",
     NotificationErrorMail: "ronyt@puah.org.il",
-    ParamX: paramX
+    ParamX: paramX,
+
+    // ←— SPLIT PAYMENTS —→
+    MaxPayments:          "10",    // allow up to 10 installments
+    MinPayments:          "1",     // minimum 1 installment
+    MinPaymentsForCredit: "1",     // threshold to treat as credit sale
+    FirstPayment:         "auto",  // auto-calculate the first installment
+    FirstPaymentLock:     "False"  // allow user to change first installment
   };
 
   try {
