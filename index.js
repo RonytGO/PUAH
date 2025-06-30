@@ -5,23 +5,25 @@ const app = express();
 
 app.get("/", async (req, res) => {
   const total = req.query.total || "6500";
-  const RegID = req.query.RegID || "";
+  const RegID = req.query.RegID || req.query.FAResponseID || ""; // Check for both RegID and FAResponseID
   const paramX = "Merkaz Limud";
 
   // Build two URLs — one for success, one for failure
   const successURL = `https://puah.tfaforms.net/17` +
     `?RegID=${encodeURIComponent(RegID)}` +
+    `&FAResponseID=${encodeURIComponent(RegID)}` + // Include both parameters in the URL
     `&Total=${encodeURIComponent(total)}` +
     `&ParamX=${encodeURIComponent(paramX)}` +
     `&Status=approved`;
 
   const errorURL = `https://puah.tfaforms.net/17` +
     `?RegID=${encodeURIComponent(RegID)}` +
+    `&FAResponseID=${encodeURIComponent(RegID)}` + // Include both parameters in the URL
     `&Total=${encodeURIComponent(total)}` +
     `&ParamX=${encodeURIComponent(paramX)}` +
     `&Status=failed`;
 
-  console.log("Received request – total:", total, "RegID:", RegID);
+  console.log("Received request - total:", total, "RegID/FAResponseID:", RegID);
 
   const payload = {
     terminal:    process.env.PELE_TERMINAL,
