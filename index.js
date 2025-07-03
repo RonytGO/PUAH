@@ -44,7 +44,6 @@ app.get("/", async (req, res) => {
     // Split payments
     MaxPayments:          "10",
     MinPayments:          "1",
-    MinPaymentsForCredit: "1",
     FirstPayment:         "auto",
     FirstPaymentLock:     "False"
   };
