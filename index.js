@@ -4,31 +4,36 @@ const fetch = require("node-fetch");
 const app = express();
 
 app.get("/", async (req, res) => {
-  const total = req.query.total || "6500";
-  const RegID = req.query.RegID || "";
-  const FAResponseID = req.query.FAResponseID || ""; // Check for both RegID and FAResponseID
-  const ParamY      = req.query.phone        || "";     // ← new
-  const paramX = "Merkaz Limud";
-  
+  const total         = req.query.total  || "6500";
+  const RegID         = req.query.RegID  || "";
+  const FAResponseID  = req.query.FAResponseID || "";
+  const paramY        = req.query.phone  || "";    // <-- lower-case p
 
-  // Build two URLs — one for success, one for failure
-  const successURL = `https://puah.tfaforms.net/17` +
+  const paramX = "Merkaz Limud";
+
+  // Build your success / error URLs
+  const successURL = 
+    `https://puah.tfaforms.net/17` +
     `?RegID=${encodeURIComponent(RegID)}` +
-    `&FAResponseID=${encodeURIComponent(FAResponseID)}` + // Include both parameters in the URL
+    `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
     `&Total=${encodeURIComponent(total)}` +
     `&ParamX=${encodeURIComponent(paramX)}` +
-    `&ParamY=${encodeURIComponent(paramY)}` +
+    `&ParamY=${encodeURIComponent(paramY)}` +     // <-- use paramY
     `&Status=approved`;
 
-  const errorURL = `https://puah.tfaforms.net/17` +
+  const errorURL = 
+    `https://puah.tfaforms.net/17` +
     `?RegID=${encodeURIComponent(RegID)}` +
-    `&FAResponseID=${encodeURIComponent(FAResponseID)}` + // Include both parameters in the URL
+    `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
     `&Total=${encodeURIComponent(total)}` +
     `&ParamX=${encodeURIComponent(paramX)}` +
-    `&ParamY=${encodeURIComponent(paramY)}` +
+    `&ParamY=${encodeURIComponent(paramY)}` +     // <-- use paramY
     `&Status=failed`;
 
-  console.log("Received request - total:", total, "RegID:", RegID, "FAResponseID: ",FAResponseID);
+  console.log(
+    "Received request →",
+    { total, RegID, FAResponseID, paramY }
+  );
 
   const payload = {
     terminal:    process.env.PELE_TERMINAL,
@@ -39,16 +44,17 @@ app.get("/", async (req, res) => {
     FreeTotal:   "False",
     ShopNo:      "001",
     Total:       total,
-    GoodURL:     successURL,      // redirect here on success
-    ErrorURL:    errorURL,        // …or here on failure
+    GoodURL:     successURL,
+    ErrorURL:    errorURL,
     NotificationGoodMail:  "ronyt@puah.org.il",
     NotificationErrorMail: "ronyt@puah.org.il",
     ParamX:      paramX,
-    ParamY:      paramY,
+    ParamY:      paramY,                            // <-- use paramY
 
     // Split payments
     MaxPayments:          "10",
     MinPayments:          "1",
+    MinPaymentsForCredit: "11",
     FirstPayment:         "auto",
     FirstPaymentLock:     "False"
   };
