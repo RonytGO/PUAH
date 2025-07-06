@@ -7,7 +7,9 @@ app.get("/", async (req, res) => {
   const total = req.query.total || "6500";
   const RegID = req.query.RegID || "";
   const FAResponseID = req.query.FAResponseID || ""; // Check for both RegID and FAResponseID
+  const ParamY      = req.query.phone        || "";     // ← new
   const paramX = "Merkaz Limud";
+  
 
   // Build two URLs — one for success, one for failure
   const successURL = `https://puah.tfaforms.net/17` +
@@ -15,6 +17,7 @@ app.get("/", async (req, res) => {
     `&FAResponseID=${encodeURIComponent(FAResponseID)}` + // Include both parameters in the URL
     `&Total=${encodeURIComponent(total)}` +
     `&ParamX=${encodeURIComponent(paramX)}` +
+    `&ParamY=${encodeURIComponent(paramY)}` +
     `&Status=approved`;
 
   const errorURL = `https://puah.tfaforms.net/17` +
@@ -22,6 +25,7 @@ app.get("/", async (req, res) => {
     `&FAResponseID=${encodeURIComponent(FAResponseID)}` + // Include both parameters in the URL
     `&Total=${encodeURIComponent(total)}` +
     `&ParamX=${encodeURIComponent(paramX)}` +
+    `&ParamY=${encodeURIComponent(paramY)}` +
     `&Status=failed`;
 
   console.log("Received request - total:", total, "RegID:", RegID, "FAResponseID: ",FAResponseID);
@@ -40,6 +44,7 @@ app.get("/", async (req, res) => {
     NotificationGoodMail:  "ronyt@puah.org.il",
     NotificationErrorMail: "ronyt@puah.org.il",
     ParamX:      paramX,
+    ParamY:      paramY,
 
     // Split payments
     MaxPayments:          "10",
