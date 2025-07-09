@@ -7,7 +7,9 @@ app.get("/", async (req, res) => {
   const total        = req.query.total         || "6500";
   const RegID        = req.query.RegID         || "";
   const FAResponseID = req.query.FAResponseID  || "";
-  const paramX       = "ML ";
+    // include ML tag plus the RegID
+  const paramX = `ML|${RegID}`;
+
 
   // Build success / error return URLs
   const successURL =
@@ -45,8 +47,7 @@ app.get("/", async (req, res) => {
     // your “free” X-param
     ParamX:      paramX,
 
-    // ← tell Pelecard to tack the CARDHOLDER NAME onto ParamX
-    AddHolderNameToXParam: "True",
+    // ← tell Pelecard to tack the CARDHOLDER NAME onto ParamX: AddHolderNameToXParam: "True",
 
     // enable up to 10 installments (no “credit” beyond 10)
     MaxPayments:          "10",
