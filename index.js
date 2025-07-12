@@ -108,7 +108,7 @@ app.get("/callback", async (req, res) => {
         ],
         Payments: [
           {
-            Amount: parseFloat(Total),
+            Amount: parseFloat(Total/100),
             Details_CreditCard: {
               Last4Digits: (ConfirmationKey||"").slice(-4)
             }
