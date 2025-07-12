@@ -87,28 +87,32 @@ app.get("/callback", async (req, res) => {
 
   console.log("Pelecard callback:", req.query);
 
+
   // If it was approved, fire off your Summit “create document”:
   if (Status === "approved") {
     try {
+      // Pelecard Total comes in cents (e.g. 100 => ₪1), so divide by 100
+      const amount = parseFloat(Total) / 100;
+
       const summitPayload = {
         Details: {
-          Date:        new Date().toISOString(),          // or null
+          Date:        new Date().toISOString(),
           Customer:    { ExternalIdentifier: FAResponseID },
-          SendByEmail: { EmailAddress: "ronyt@puah.org.il", Original: true },
+          SendByEmail: { EmailAddress: "you@yourdomain.com", Original: true },
           Type:        1,
           ExternalReference: RegID,
         },
         Items: [
           {
             Quantity:            1,
-            UnitPrice:           parseFloat(Total),
-            TotalPrice:          parseFloat(Total),
+            UnitPrice:           amount,
+            TotalPrice:          amount,
             Item: { Name: "קורס" }
           }
         ],
         Payments: [
           {
-            Amount: parseFloat(Total/100),
+            Amount: amount,
             Details_CreditCard: {
               Last4Digits: (ConfirmationKey||"").slice(-4)
             }
