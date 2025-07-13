@@ -13,6 +13,7 @@ app.get("/", async (req, res) => {
   // Collect payer details from URL
   const CustomerName  = req.query.CustomerName  || "";
   const CustomerEmail = req.query.CustomerEmail || "";
+  const phone = req.query.phone || "";
   
   // Build internal ParamX
   const paramX = `ML|${RegID}`;
@@ -80,7 +81,8 @@ app.get("/callback", async (req, res) => {
     TransactionId,
     ConfirmationKey,
     CustomerName,
-    CustomerEmail
+    CustomerEmail,
+    phone
   } = req.query;
 
   console.log("Pelecard callback:", req.query);
@@ -97,10 +99,10 @@ app.get("/callback", async (req, res) => {
             ExternalIdentifier: FAResponseID,
             SearchMode: 0,
             Name: CustomerName || "Unknown",
-            EmailAddress: CustomerEmail || "you@yourdomain.com"
+            EmailAddress: CustomerEmail || "unknow@puah.org.il"
           },
           SendByEmail: {
-            EmailAddress: CustomerEmail || "you@yourdomain.com",
+            EmailAddress: "ronyt@puah.org.il",
             Original: true,
             SendAsPaymentRequest: false
           },
@@ -149,7 +151,8 @@ app.get("/callback", async (req, res) => {
     `?RegID=${encodeURIComponent(RegID)}` +
     `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
     `&Total=${encodeURIComponent(Total)}` +
-    `&Status=${encodeURIComponent(Status)}`;
+    `&Status=${encodeURIComponent(Status)}`+
+    `&phone=${encodeURIComponent(phone)}`;
   res.redirect(onward);
 });
 
