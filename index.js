@@ -1,4 +1,3 @@
-// index.js
 const express = require("express");
 const fetch   = require("node-fetch");
 
@@ -8,18 +7,23 @@ const app = express();
 // 1) INIT PAYMENT
 // ────────────────────────────────────────────────────────
 app.get("/", async (req, res) => {
-  const total        = req.query.total         || "6500";
-  const RegID        = req.query.RegID         || "";
-  const FAResponseID = req.query.FAResponseID  || "";
-  // build your X-param however you like:
+  const total         = req.query.total         || "6500";
+  const RegID         = req.query.RegID         || "";
+  const FAResponseID  = req.query.FAResponseID  || "";
+  // Collect payer details from URL
+  const CustomerName  = req.query.CustomerName  || "";
+  const CustomerEmail = req.query.CustomerEmail || "";
+  
+  // Build internal ParamX
   const paramX = `ML|${RegID}`;
 
-  // instead of pointing directly to FormAssembly,
-  // tell Pelecard to callback to our `/callback` endpoint:
+  // Base callback URL
   const baseCallback = `https://${req.get("host")}/callback`;
-  const commonQS = 
+  const commonQS =
     `?RegID=${encodeURIComponent(RegID)}` +
     `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
+    `&CustomerName=${encodeURIComponent(CustomerName)}` +
+    `&CustomerEmail=${encodeURIComponent(CustomerEmail)}` +
     `&Total=${encodeURIComponent(total)}` +
     `&ParamX=${encodeURIComponent(paramX)}`;
 
@@ -27,21 +31,15 @@ app.get("/", async (req, res) => {
     terminal:    process.env.PELE_TERMINAL,
     user:        process.env.PELE_USER,
     password:    process.env.PELE_PASSWORD,
-
     ActionType:  "J4",
     Currency:    "1",
     FreeTotal:   "False",
     ShopNo:      "001",
     Total:       total,
-
-    // on *success* Pelecard will GET /callback?…&Status=approved
-    GoodURL:  `${baseCallback}${commonQS}&Status=approved`,
-    // on *failure* Pelecard will GET /callback?…&Status=failed
-    ErrorURL: `${baseCallback}${commonQS}&Status=failed`,
-
+    GoodURL:     `${baseCallback}${commonQS}&Status=approved`,
+    ErrorURL:    `${baseCallback}${commonQS}&Status=failed`,
     NotificationGoodMail:  "ronyt@puah.org.il",
     NotificationErrorMail: "ronyt@puah.org.il",
-
     ParamX:      paramX,
     MaxPayments:          "10",
     MinPayments:          "1",
@@ -59,7 +57,6 @@ app.get("/", async (req, res) => {
       }
     );
     const data = await peleRes.json();
-
     if (data.URL) {
       return res.redirect(data.URL);
     }
@@ -71,7 +68,6 @@ app.get("/", async (req, res) => {
   }
 });
 
-
 // ────────────────────────────────────────────────────────
 // 2) CALLBACK (after user pays or fails)
 // ────────────────────────────────────────────────────────
@@ -82,31 +78,40 @@ app.get("/callback", async (req, res) => {
     Total,
     Status,
     TransactionId,
-    ConfirmationKey
+    ConfirmationKey,
+    CustomerName,
+    CustomerEmail
   } = req.query;
 
   console.log("Pelecard callback:", req.query);
 
-
-  // If it was approved, fire off your Summit “create document”:
   if (Status === "approved") {
     try {
-      // Pelecard Total comes in cents (e.g. 100 => ₪1), so divide by 100
+      // convert cents to shekels
       const amount = parseFloat(Total) / 100;
 
       const summitPayload = {
         Details: {
-          Date:        new Date().toISOString(),
-          Customer:    { ExternalIdentifier: FAResponseID },
-          SendByEmail: { EmailAddress: "you@yourdomain.com", Original: true },
-          Type:        1,
-          ExternalReference: RegID,
+          Date: new Date().toISOString(),
+          Customer: {
+            ExternalIdentifier: FAResponseID,
+            SearchMode: 0,
+            Name: CustomerName || "Unknown",
+            EmailAddress: CustomerEmail || "you@yourdomain.com"
+          },
+          SendByEmail: {
+            EmailAddress: CustomerEmail || "you@yourdomain.com",
+            Original: true,
+            SendAsPaymentRequest: false
+          },
+          Type: 1,
+          ExternalReference: RegID
         },
         Items: [
           {
-            Quantity:            1,
-            UnitPrice:           amount,
-            TotalPrice:          amount,
+            Quantity:   1,
+            UnitPrice:  amount,
+            TotalPrice: amount,
             Item: { Name: "קורס" }
           }
         ],
@@ -133,14 +138,13 @@ app.get("/callback", async (req, res) => {
           body:    JSON.stringify(summitPayload)
         }
       );
-      const summitData = await summitRes.json();
-      console.log("Summit response:", summitData);
+      console.log("Summit response status:", summitRes.status);
     } catch (err) {
       console.error("Summit API error:", err);
     }
   }
 
-  // Finally, redirect the user on to your FormAssembly “17”:
+  // redirect back to FA form 17
   const onward = `https://puah.tfaforms.net/17` +
     `?RegID=${encodeURIComponent(RegID)}` +
     `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
@@ -148,7 +152,6 @@ app.get("/callback", async (req, res) => {
     `&Status=${encodeURIComponent(Status)}`;
   res.redirect(onward);
 });
-
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log("Listening on port", port));
