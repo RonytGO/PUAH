@@ -1,3 +1,4 @@
+// index.js
 const express = require("express");
 const fetch   = require("node-fetch");
 
@@ -10,23 +11,25 @@ app.get("/", async (req, res) => {
   const total         = req.query.total         || "6500";
   const RegID         = req.query.RegID         || "";
   const FAResponseID  = req.query.FAResponseID  || "";
-  // Collect payer details from URL
   const CustomerName  = req.query.CustomerName  || "";
   const CustomerEmail = req.query.CustomerEmail || "";
-  const phone = req.query.phone || "";
-  
-  // Build internal ParamX
+  const phone         = req.query.phone        || "";
+  const Course        = req.query.Course       || "";
+
+  // Build your internal X-param
   const paramX = `ML|${RegID}`;
 
-  // Base callback URL
+  // Build the common query string that Pelecard will callback with
   const baseCallback = `https://${req.get("host")}/callback`;
   const commonQS =
-    `?RegID=${encodeURIComponent(RegID)}` +
-    `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
-    `&CustomerName=${encodeURIComponent(CustomerName)}` +
-    `&CustomerEmail=${encodeURIComponent(CustomerEmail)}` +
-    `&Total=${encodeURIComponent(total)}` +
-    `&ParamX=${encodeURIComponent(paramX)}`;
+      `?RegID=${encodeURIComponent(RegID)}` +
+      `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
+      `&CustomerName=${encodeURIComponent(CustomerName)}` +
+      `&CustomerEmail=${encodeURIComponent(CustomerEmail)}` +
+      `&phone=${encodeURIComponent(phone)}` +
+      `&Course=${encodeURIComponent(Course)}` +
+      `&Total=${encodeURIComponent(total)}` +
+      `&ParamX=${encodeURIComponent(paramX)}`;
 
   const payload = {
     terminal:    process.env.PELE_TERMINAL,
@@ -82,16 +85,17 @@ app.get("/callback", async (req, res) => {
     ConfirmationKey,
     CustomerName,
     CustomerEmail,
-    phone
+    phone,
+    CreditCardNumber,
+    Course
   } = req.query;
 
   console.log("Pelecard callback:", req.query);
 
   if (Status === "approved") {
     try {
-      // convert cents to shekels
+      // Pelecard gives cents, so divide by 100 for Summit
       const amount = parseFloat(Total) / 100;
-
       const summitPayload = {
         Details: {
           Date: new Date().toISOString(),
@@ -99,7 +103,7 @@ app.get("/callback", async (req, res) => {
             ExternalIdentifier: FAResponseID,
             SearchMode: 0,
             Name: CustomerName || "Unknown",
-            EmailAddress: CustomerEmail || "unknow@puah.org.il"
+            EmailAddress: CustomerEmail || "unknown@puah.org.il"
           },
           SendByEmail: {
             EmailAddress: "ronyt@puah.org.il",
@@ -114,14 +118,14 @@ app.get("/callback", async (req, res) => {
             Quantity:   1,
             UnitPrice:  amount,
             TotalPrice: amount,
-            Item: { Name: "קורס" }
+            Item: { Name: Course || "קורס" }
           }
         ],
         Payments: [
           {
             Amount: amount,
             Details_CreditCard: {
-              Last4Digits: (ConfirmationKey||"").slice(-4)
+              Last4Digits: (CreditCardNumber||"").slice(-4)
             }
           }
         ],
@@ -146,13 +150,15 @@ app.get("/callback", async (req, res) => {
     }
   }
 
-  // redirect back to FA form 17
-  const onward = `https://puah.tfaforms.net/17` +
+  // Finally send them back to FA Form 17
+  const onward = 
+    `https://puah.tfaforms.net/17` +
     `?RegID=${encodeURIComponent(RegID)}` +
     `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
     `&Total=${encodeURIComponent(Total)}` +
-    `&Status=${encodeURIComponent(Status)}`+
-    `&phone=${encodeURIComponent(phone)}`;
+    `&Status=${encodeURIComponent(Status)}` +
+    `&phone=${encodeURIComponent(phone)}` +
+    `&Course=${encodeURIComponent(Course)}`;
   res.redirect(onward);
 });
 
