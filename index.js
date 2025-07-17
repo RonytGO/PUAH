@@ -8,28 +8,31 @@ const app = express();
 // 1) INIT PAYMENT
 // ────────────────────────────────────────────────────────
 app.get("/", async (req, res) => {
-  const total         = req.query.total         || "6500";
-  const RegID         = req.query.RegID         || "";
-  const FAResponseID  = req.query.FAResponseID  || "";
-  const CustomerName  = req.query.CustomerName  || "";
-  const CustomerEmail = req.query.CustomerEmail || "";
-  const phone         = req.query.phone        || "";
-  const Course        = req.query.Course       || "";
+  // pull everything from the querystring
+  const {
+    total         = "6500",
+    RegID         = "",
+    FAResponseID  = "",
+    CustomerName  = "",
+    CustomerEmail = "",
+    phone         = "",
+    Course        = ""
+  } = req.query;
 
-  // Build your internal X-param
+  // our internal X-param
   const paramX = `ML|${RegID}`;
 
-  // Build the common query string that Pelecard will callback with
+  // build the callback URL that Pelecard will hit once they're done
   const baseCallback = `https://${req.get("host")}/callback`;
   const commonQS =
-      `?RegID=${encodeURIComponent(RegID)}` +
-      `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
-      `&CustomerName=${encodeURIComponent(CustomerName)}` +
-      `&CustomerEmail=${encodeURIComponent(CustomerEmail)}` +
-      `&phone=${encodeURIComponent(phone)}` +
-      `&Course=${encodeURIComponent(Course)}` +
-      `&Total=${encodeURIComponent(total)}` +
-      `&ParamX=${encodeURIComponent(paramX)}`;
+    `?RegID=${encodeURIComponent(RegID)}` +
+    `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
+    `&CustomerName=${encodeURIComponent(CustomerName)}` +
+    `&CustomerEmail=${encodeURIComponent(CustomerEmail)}` +
+    `&phone=${encodeURIComponent(phone)}` +
+    `&Course=${encodeURIComponent(Course)}` +
+    `&Total=${encodeURIComponent(total)}` +
+    `&ParamX=${encodeURIComponent(paramX)}`;
 
   const payload = {
     terminal:    process.env.PELE_TERMINAL,
@@ -61,14 +64,15 @@ app.get("/", async (req, res) => {
       }
     );
     const data = await peleRes.json();
+
     if (data.URL) {
       return res.redirect(data.URL);
     }
     console.error("Pelecard init error:", data);
-    return res.status(500).send("Pelecard error: " + JSON.stringify(data));
+    res.status(500).send("Pelecard error: " + JSON.stringify(data));
   } catch (err) {
     console.error("Server error:", err);
-    return res.status(500).send("Server error: " + err.message);
+    res.status(500).send("Server error: " + err.message);
   }
 });
 
@@ -77,65 +81,78 @@ app.get("/", async (req, res) => {
 // ────────────────────────────────────────────────────────
 app.get("/callback", async (req, res) => {
   const {
-    RegID,
-    FAResponseID,
-    Total,
-    Status,
-    TransactionId,
-    ConfirmationKey,
-    CustomerName,
-    CustomerEmail,
-    phone,
-    CreditCardNumber,
-    Course
+    RegID         = "",
+    FAResponseID  = "",
+    Total         = "",
+    Status        = "",
+    TransactionId = "",
+    ConfirmationKey = "",
+    CustomerName  = "",
+    CustomerEmail = "",
+    phone         = "",
+    CreditCardNumber = "",
+    MaskedCardNo  = "",
+    Course        = ""
   } = req.query;
 
   console.log("Pelecard callback:", req.query);
 
   if (Status === "approved") {
-    try {
-      // Pelecard gives cents, so divide by 100 for Summit
-      const amount = parseFloat(Total) / 100;
-      const summitPayload = {
-        Details: {
-          Date: new Date().toISOString(),
-          Customer: {
-            ExternalIdentifier: FAResponseID,
-            SearchMode: 0,
-            Name: CustomerName || "Unknown",
-            EmailAddress: CustomerEmail || "unknown@puah.org.il"
-          },
-          SendByEmail: {
-            EmailAddress: "ronyt@puah.org.il",
-            Original: true,
-            SendAsPaymentRequest: false
-          },
-          Type: 1,
-          ExternalReference: RegID
-        },
-        Items: [
-          {
-            Quantity:   1,
-            UnitPrice:  amount,
-            TotalPrice: amount,
-            Item: { Name: Course || "קורס" }
-          }
-        ],
-        Payments: [
-          {
-            Amount: amount,
-            Details_CreditCard: {
-              Last4Digits: (CreditCardNumber||"").slice(-4)
-            }
-          }
-        ],
-        VATIncluded: true,
-        Credentials: {
-          CompanyID: parseInt(process.env.SUMMIT_COMPANY_ID, 10),
-          APIKey:    process.env.SUMMIT_API_KEY
-        }
-      };
+    // Pelecard sends cents (e.g. 100 => ₪1), so convert back:
+    const amount = parseFloat(Total) / 100;
 
+    // strip any stray parentheses from Course
+    const courseClean = Course.replace(/^\(+/, "").replace(/\)+$/, "");
+
+    // last-4 from whichever CC field comes back
+    const last4 = (CreditCardNumber || MaskedCardNo || "").slice(-4);
+
+    // build a comma-separated “to” list
+    const toList = [CustomerEmail, "ronyt@puah.org.il"]
+      .filter(Boolean)
+      .join(",");
+
+    const summitPayload = {
+      Details: {
+        Date:        new Date().toISOString(),
+        Customer: {
+          ExternalIdentifier: FAResponseID,
+          SearchMode: 0,
+          Name: CustomerName || "Unknown",
+          EmailAddress: CustomerEmail || "unknown@puah.org.il"
+        },
+        SendByEmail: {
+          EmailAddress: toList,
+          Original: true,
+          SendAsPaymentRequest: false
+        },
+        Type: 1,
+        ExternalReference: RegID
+      },
+      Items: [
+        {
+          Quantity:   1,
+          UnitPrice:  amount,
+          TotalPrice: amount,
+          Item: { Name: courseClean || "קורס" }
+        }
+      ],
+      Payments: [
+        {
+          Amount: amount,
+          Details_CreditCard: {
+            Last4Digits: last4
+          }
+        }
+      ],
+      VATIncluded: true,
+      Credentials: {
+        CompanyID: parseInt(process.env.SUMMIT_COMPANY_ID, 10),
+        APIKey:    process.env.SUMMIT_API_KEY
+      }
+    };
+
+    try {
       const summitRes = await fetch(
         "https://app.sumit.co.il/accounting/documents/create/",
         {
@@ -150,8 +167,8 @@ app.get("/callback", async (req, res) => {
     }
   }
 
-  // Finally send them back to FA Form 17
-  const onward = 
+  // finally send the user back to your FA form 17:
+  const onward =
     `https://puah.tfaforms.net/17` +
     `?RegID=${encodeURIComponent(RegID)}` +
     `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
