@@ -1,6 +1,6 @@
 // index.js
 const express = require("express");
-const fetch   = require("node-fetch");
+const fetch = require("node-fetch");
 
 const app = express();
 
@@ -10,13 +10,13 @@ const app = express();
 app.get("/", async (req, res) => {
   // pull everything from the querystring
   const {
-    total         = "6500",
-    RegID         = "",
-    FAResponseID  = "",
-    CustomerName  = "",
+    total = "6500",
+    RegID = "",
+    FAResponseID = "",
+    CustomerName = "",
     CustomerEmail = "",
-    phone         = "",
-    Course        = ""
+    phone = "",
+    Course = ""
   } = req.query;
 
   // our internal X-param
@@ -35,32 +35,32 @@ app.get("/", async (req, res) => {
     `&ParamX=${encodeURIComponent(paramX)}`;
 
   const payload = {
-    terminal:    process.env.PELE_TERMINAL,
-    user:        process.env.PELE_USER,
-    password:    process.env.PELE_PASSWORD,
-    ActionType:  "J4",
-    Currency:    "1",
-    FreeTotal:   "False",
-    ShopNo:      "001",
-    Total:       total,
-    GoodURL:     `${baseCallback}${commonQS}&Status=approved`,
-    ErrorURL:    `${baseCallback}${commonQS}&Status=failed`,
-    NotificationGoodMail:  "ronyt@puah.org.il",
+    terminal: process.env.PELE_TERMINAL,
+    user: process.env.PELE_USER,
+    password: process.env.PELE_PASSWORD,
+    ActionType: "J4",
+    Currency: "1",
+    FreeTotal: "False",
+    ShopNo: "001",
+    Total: total,
+    GoodURL: `${baseCallback}${commonQS}&Status=approved`,
+    ErrorURL: `${baseCallback}${commonQS}&Status=failed`,
+    NotificationGoodMail: "ronyt@puah.org.il",
     NotificationErrorMail: "ronyt@puah.org.il",
-    ParamX:      paramX,
-    MaxPayments:          "10",
-    MinPayments:          "1",
-    FirstPayment:         "auto",
-    FirstPaymentLock:     "False"
+    ParamX: paramX,
+    MaxPayments: "10",
+    MinPayments: "1",
+    FirstPayment: "auto",
+    FirstPaymentLock: "False"
   };
 
   try {
     const peleRes = await fetch(
       "https://gateway21.pelecard.biz/PaymentGW/init",
       {
-        method:  "POST",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(payload)
+        body: JSON.stringify(payload)
       }
     );
     const data = await peleRes.json();
@@ -81,18 +81,18 @@ app.get("/", async (req, res) => {
 // ────────────────────────────────────────────────────────
 app.get("/callback", async (req, res) => {
   const {
-    RegID         = "",
-    FAResponseID  = "",
-    Total         = "",
-    Status        = "",
+    RegID = "",
+    FAResponseID = "",
+    Total = "",
+    Status = "",
     TransactionId = "",
     ConfirmationKey = "",
-    CustomerName  = "",
+    CustomerName = "",
     CustomerEmail = "",
-    phone         = "",
+    phone = "",
     CreditCardNumber = "",
-    MaskedCardNo  = "",
-    Course        = ""
+    MaskedCardNo = "",
+    Course = ""
   } = req.query;
 
   console.log("Pelecard callback:", req.query);
@@ -104,17 +104,22 @@ app.get("/callback", async (req, res) => {
     // strip any stray parentheses from Course
     const courseClean = Course.replace(/^\(+/, "").replace(/\)+$/, "");
 
-    // last-4 from whichever CC field comes back
-    const last4 = (CreditCardNumber || MaskedCardNo || "").slice(-4);
+    // Improved last-4 digits extraction
+    const getLast4 = (cardNumber) => {
+      if (!cardNumber) return '';
+      const digitsOnly = cardNumber.replace(/\D/g, '');
+      return digitsOnly.slice(-4);
+    };
+    const last4 = getLast4(CreditCardNumber || MaskedCardNo || '');
 
-    // build a comma-separated “to” list
-    const toList = [CustomerEmail, "ronyt@puah.org.il","hd@puah.org.il"]
+    // build a comma-separated "to" list
+    const toList = [CustomerEmail, "ronyt@puah.org.il", "hd@puah.org.il"]
       .filter(Boolean)
       .join(",");
 
     const summitPayload = {
       Details: {
-        Date:        new Date().toISOString(),
+        Date: new Date().toISOString(),
         Customer: {
           ExternalIdentifier: FAResponseID,
           SearchMode: 0,
@@ -131,8 +136,8 @@ app.get("/callback", async (req, res) => {
       },
       Items: [
         {
-          Quantity:   1,
-          UnitPrice:  amount,
+          Quantity: 1,
+          UnitPrice: amount,
           TotalPrice: amount,
           Item: { Name: courseClean || "קורס" }
         }
@@ -148,7 +153,7 @@ app.get("/callback", async (req, res) => {
       VATIncluded: true,
       Credentials: {
         CompanyID: parseInt(process.env.SUMMIT_COMPANY_ID, 10),
-        APIKey:    process.env.SUMMIT_API_KEY
+        APIKey: process.env.SUMMIT_API_KEY
       }
     };
 
@@ -156,12 +161,14 @@ app.get("/callback", async (req, res) => {
       const summitRes = await fetch(
         "https://app.sumit.co.il/accounting/documents/create/",
         {
-          method:  "POST",
+          method: "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify(summitPayload)
+          body: JSON.stringify(summitPayload)
         }
       );
       console.log("Summit response status:", summitRes.status);
+      const summitData = await summitRes.json();
+      console.log("Summit response data:", summitData);
     } catch (err) {
       console.error("Summit API error:", err);
     }
