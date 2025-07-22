@@ -108,7 +108,7 @@ app.get("/callback", async (req, res) => {
     const last4 = (CreditCardNumber || MaskedCardNo || "").slice(-4);
 
     // build a comma-separated “to” list
-    const toList = [CustomerEmail, "ronyt@puah.org.il"]
+    const toList = [CustomerEmail, "ronyt@puah.org.il","hd@puah.org.il"]
       .filter(Boolean)
       .join(",");
 
