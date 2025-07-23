@@ -110,7 +110,8 @@ app.get("/callback", async (req, res) => {
     phone = "",
     CreditCardNumber = "",
     MaskedCardNo = "",
-    Course = ""
+    Course = "",
+    Payments = "1"
   } = req.query;
 
   console.log("Pelecard callback:", req.query);
@@ -119,12 +120,16 @@ app.get("/callback", async (req, res) => {
     const amount = parseFloat(Total) / 100;
     const courseClean = Course.replace(/^[\(]+|[\)]+$/g, "");
 
-    const getLast4 = (cardNumber) => {
-      if (!cardNumber) return '';
-      const digitsOnly = cardNumber.replace(/\D/g, '');
-      return digitsOnly.slice(-4);
-    };
-    const last4 = getLast4(CreditCardNumber || MaskedCardNo || '');
+    const rawCard = CreditCardNumber || MaskedCardNo || "";
+    console.log("Raw card input:", rawCard);
+
+    function extractLast4(card) {
+      if (!card || typeof card !== "string") return "[Missing]";
+      const match = card.match(/(\d{4})\s*$/);
+      return match ? match[1] : "[Invalid]";
+    }
+
+    const last4 = extractLast4(rawCard);
 
     const summitPayload = {
       Details: {
@@ -155,7 +160,8 @@ app.get("/callback", async (req, res) => {
         {
           Amount: amount,
           Details_CreditCard: {
-            Last4Digits: last4
+            Last4Digits: last4,
+            NumberOfPayments: parseInt(Payments, 10) || 1
           }
         }
       ],
