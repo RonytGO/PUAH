@@ -6,6 +6,21 @@ const nodemailer = require("nodemailer");
 const app = express();
 
 // ────────────────────────────────────────────────────────
+// Utility: extract 4 digits from CreditCard / MaskedCard / ShvaOutput
+function extractLast4Digits({ CreditCardNumber, MaskedCardNo, ShvaOutput }) {
+  const raw = CreditCardNumber || MaskedCardNo || "";
+  const clean = raw.replace(/\D/g, "");
+  if (clean.length >= 4) return clean.slice(-4);
+
+  if (ShvaOutput) {
+    const match = ShvaOutput.match(/\*+(\d{4})/); // looks for ******1234
+    if (match) return match[1];
+  }
+
+  return "[Missing]";
+}
+
+// ────────────────────────────────────────────────────────
 // 1) INIT PAYMENT
 // ────────────────────────────────────────────────────────
 app.get("/", async (req, res) => {
@@ -48,20 +63,18 @@ app.get("/", async (req, res) => {
     MaxPayments: "10",
     MinPayments: "1",
     FirstPayment: "auto",
-    FirstPaymentLock: "False"
+    FirstPaymentLock: "False",
+    FeedbackDataTransferMethod: "GET"
   };
 
   try {
-    const peleRes = await fetch(
-      "https://gateway21.pelecard.biz/PaymentGW/init",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      }
-    );
-    const data = await peleRes.json();
+    const peleRes = await fetch("https://gateway21.pelecard.biz/PaymentGW/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
 
+    const data = await peleRes.json();
     if (data.URL) {
       return res.redirect(data.URL);
     }
@@ -110,8 +123,12 @@ app.get("/callback", async (req, res) => {
     phone = "",
     CreditCardNumber = "",
     MaskedCardNo = "",
+    ShvaOutput = "",
     Course = "",
-    Payments = "1"
+    Payments = "1",
+    FirstPaymentTotal = "",
+    FixedPaymentTotal = "",
+    TotalPayments = "1"
   } = req.query;
 
   console.log("Pelecard callback:", req.query);
@@ -119,17 +136,40 @@ app.get("/callback", async (req, res) => {
   if (Status === "approved") {
     const amount = parseFloat(Total) / 100;
     const courseClean = Course.replace(/^[\(]+|[\)]+$/g, "");
+    const last4 = extractLast4Digits({ CreditCardNumber, MaskedCardNo, ShvaOutput });
+    const totalPayments = parseInt(TotalPayments, 10) || 1;
+    const firstPay = parseFloat(FirstPaymentTotal || 0) / 100;
+    const fixedPay = parseFloat(FixedPaymentTotal || 0) / 100;
 
-    const rawCard = CreditCardNumber || MaskedCardNo || "";
-    console.log("Raw card input:", rawCard);
+    let payments = [];
 
-    function extractLast4(card) {
-      if (!card || typeof card !== "string") return "[Missing]";
-      const match = card.match(/(\d{4})\s*$/);
-      return match ? match[1] : "[Invalid]";
+    if (totalPayments > 1 && fixedPay > 0 && firstPay > 0) {
+      payments.push({
+        Amount: firstPay,
+        Details_CreditCard: {
+          Last4Digits: last4,
+          NumberOfPayments: totalPayments
+        }
+      });
+
+      for (let i = 1; i < totalPayments; i++) {
+        payments.push({
+          Amount: fixedPay,
+          Details_CreditCard: {
+            Last4Digits: last4,
+            NumberOfPayments: totalPayments
+          }
+        });
+      }
+    } else {
+      payments.push({
+        Amount: amount,
+        Details_CreditCard: {
+          Last4Digits: last4,
+          NumberOfPayments: 1
+        }
+      });
     }
-
-    const last4 = extractLast4(rawCard);
 
     const summitPayload = {
       Details: {
@@ -156,15 +196,7 @@ app.get("/callback", async (req, res) => {
           Item: { Name: courseClean || "קורס" }
         }
       ],
-      Payments: [
-        {
-          Amount: amount,
-          Details_CreditCard: {
-            Last4Digits: last4,
-            NumberOfPayments: parseInt(Payments, 10) || 1
-          }
-        }
-      ],
+      Payments: payments,
       VATIncluded: true,
       Credentials: {
         CompanyID: parseInt(process.env.SUMMIT_COMPANY_ID, 10),
@@ -173,14 +205,11 @@ app.get("/callback", async (req, res) => {
     };
 
     try {
-      const summitRes = await fetch(
-        "https://app.sumit.co.il/accounting/documents/create/",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(summitPayload)
-        }
-      );
+      const summitRes = await fetch("https://app.sumit.co.il/accounting/documents/create/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(summitPayload)
+      });
 
       const summitData = await summitRes.json();
       console.log("Summit response status:", summitRes.status);
