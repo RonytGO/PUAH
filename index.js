@@ -88,7 +88,8 @@ app.get("/callback", async (req, res) => {
     Payments = "1",
     FirstPaymentTotal = "",
     FixedPaymentTotal = "",
-    TotalPayments = "1"
+    TotalPayments = "1",
+    CreditCardNumber = ""
   } = req.query;
 
   console.log("Pelecard callback:", req.query);
@@ -100,13 +101,16 @@ app.get("/callback", async (req, res) => {
     const firstPay = parseFloat(FirstPaymentTotal || 0) / 100;
     const fixedPay = parseFloat(FixedPaymentTotal || 0) / 100;
 
+    const last4 = CreditCardNumber?.replace(/\D/g, "").slice(-4) || "0000";
+
     let payments = [];
 
     if (totalPayments > 1 && fixedPay > 0 && firstPay > 0) {
       payments.push({
         Amount: firstPay,
+        Type: "CreditCard",
         Details_CreditCard: {
-          Last4Digits: "[Redacted]",
+          Last4Digits: last4,
           NumberOfPayments: totalPayments
         }
       });
@@ -114,8 +118,9 @@ app.get("/callback", async (req, res) => {
       for (let i = 1; i < totalPayments; i++) {
         payments.push({
           Amount: fixedPay,
+          Type: "CreditCard",
           Details_CreditCard: {
-            Last4Digits: "[Redacted]",
+            Last4Digits: last4,
             NumberOfPayments: totalPayments
           }
         });
@@ -123,8 +128,9 @@ app.get("/callback", async (req, res) => {
     } else {
       payments.push({
         Amount: amount,
+        Type: "CreditCard",
         Details_CreditCard: {
-          Last4Digits: "[Redacted]",
+          Last4Digits: last4,
           NumberOfPayments: 1
         }
       });
