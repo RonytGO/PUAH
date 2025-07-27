@@ -1,24 +1,8 @@
 // index.js
 const express = require("express");
 const fetch = require("node-fetch");
-const nodemailer = require("nodemailer");
 
 const app = express();
-
-// ────────────────────────────────────────────────────────
-// Utility: extract 4 digits from CreditCard / MaskedCard / ShvaOutput
-function extractLast4Digits({ CreditCardNumber, MaskedCardNo, ShvaOutput }) {
-  const raw = CreditCardNumber || MaskedCardNo || "";
-  const clean = raw.replace(/\D/g, "");
-  if (clean.length >= 4) return clean.slice(-4);
-
-  if (ShvaOutput) {
-    const match = ShvaOutput.match(/\*+(\d{4})/); // looks for ******1234
-    if (match) return match[1];
-  }
-
-  return "[Missing]";
-}
 
 // ────────────────────────────────────────────────────────
 // 1) INIT PAYMENT
@@ -87,27 +71,6 @@ app.get("/", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────
-// 2) SEND MAIL TO STAFF
-// ────────────────────────────────────────────────────────
-async function sendBccCopyToStaff(receiptLink, customerName, regId) {
-  const transporter = nodemailer.createTransport({
-    service: "Gmail",
-    auth: {
-      user: process.env.MY_EMAIL,
-      pass: process.env.MY_PASSWORD
-    }
-  });
-
-  await transporter.sendMail({
-    from: `Puah Payments <${process.env.MY_EMAIL}>`,
-    to: ["ronyt@puah.org.il", "hd@puah.org.il"],
-    subject: `New Payment Received – ${customerName}`,
-    html: `<p>New payment was received for registration ID: ${regId}.</p>
-           <p>Receipt link: <a href="${receiptLink}">${receiptLink}</a></p>`
-  });
-}
-
-// ────────────────────────────────────────────────────────
 // 3) CALLBACK (after user pays or fails)
 // ────────────────────────────────────────────────────────
 app.get("/callback", async (req, res) => {
@@ -121,9 +84,6 @@ app.get("/callback", async (req, res) => {
     CustomerName = "",
     CustomerEmail = "",
     phone = "",
-    CreditCardNumber = "",
-    MaskedCardNo = "",
-    ShvaOutput = "",
     Course = "",
     Payments = "1",
     FirstPaymentTotal = "",
@@ -136,7 +96,6 @@ app.get("/callback", async (req, res) => {
   if (Status === "approved") {
     const amount = parseFloat(Total) / 100;
     const courseClean = Course.replace(/^[\(]+|[\)]+$/g, "");
-    const last4 = extractLast4Digits({ CreditCardNumber, MaskedCardNo, ShvaOutput });
     const totalPayments = parseInt(TotalPayments, 10) || 1;
     const firstPay = parseFloat(FirstPaymentTotal || 0) / 100;
     const fixedPay = parseFloat(FixedPaymentTotal || 0) / 100;
@@ -147,7 +106,7 @@ app.get("/callback", async (req, res) => {
       payments.push({
         Amount: firstPay,
         Details_CreditCard: {
-          Last4Digits: last4,
+          Last4Digits: "[Redacted]",
           NumberOfPayments: totalPayments
         }
       });
@@ -156,7 +115,7 @@ app.get("/callback", async (req, res) => {
         payments.push({
           Amount: fixedPay,
           Details_CreditCard: {
-            Last4Digits: last4,
+            Last4Digits: "[Redacted]",
             NumberOfPayments: totalPayments
           }
         });
@@ -165,7 +124,7 @@ app.get("/callback", async (req, res) => {
       payments.push({
         Amount: amount,
         Details_CreditCard: {
-          Last4Digits: last4,
+          Last4Digits: "[Redacted]",
           NumberOfPayments: 1
         }
       });
@@ -214,10 +173,6 @@ app.get("/callback", async (req, res) => {
       const summitData = await summitRes.json();
       console.log("Summit response status:", summitRes.status);
       console.log("Summit response:", summitData);
-
-      if (summitData?.DocumentUrl) {
-        await sendBccCopyToStaff(summitData.DocumentUrl, CustomerName, RegID);
-      }
     } catch (err) {
       console.error("Summit API error:", err);
     }
