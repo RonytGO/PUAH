@@ -1,4 +1,3 @@
-// index.js
 const express = require("express");
 const fetch = require("node-fetch");
 
@@ -59,9 +58,12 @@ app.get("/", async (req, res) => {
     });
 
     const data = await peleRes.json();
+    console.log("Pelecard response:", data);
+
     if (data.URL) {
       return res.redirect(data.URL);
     }
+
     console.error("Pelecard init error:", data);
     res.status(500).send("Pelecard error: " + JSON.stringify(data));
   } catch (err) {
@@ -71,7 +73,7 @@ app.get("/", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────
-// 3) CALLBACK (after user pays or fails)
+// 2) CALLBACK (after user pays or fails)
 // ────────────────────────────────────────────────────────
 app.get("/callback", async (req, res) => {
   const {
@@ -92,7 +94,16 @@ app.get("/callback", async (req, res) => {
     CreditCardNumber = ""
   } = req.query;
 
-  console.log("Pelecard callback:", req.query);
+  console.log("Callback query received:", req.originalUrl);
+
+  const onward =
+    `https://puah.tfaforms.net/17` +
+    `?RegID=${encodeURIComponent(RegID)}` +
+    `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
+    `&Total=${encodeURIComponent(Total)}` +
+    `&Status=${encodeURIComponent(Status)}` +
+    `&phone=${encodeURIComponent(phone)}` +
+    `&Course=${encodeURIComponent(Course)}`;
 
   if (Status === "approved") {
     const amount = parseFloat(Total) / 100;
@@ -100,7 +111,6 @@ app.get("/callback", async (req, res) => {
     const totalPayments = parseInt(TotalPayments, 10) || 1;
     const firstPay = parseFloat(FirstPaymentTotal || 0) / 100;
     const fixedPay = parseFloat(FixedPaymentTotal || 0) / 100;
-
     const last4 = CreditCardNumber?.replace(/\D/g, "").slice(-4) || "0000";
 
     let payments = [];
@@ -170,13 +180,14 @@ app.get("/callback", async (req, res) => {
     };
 
     try {
+      console.time("SummitDocCreate");
       const summitRes = await fetch("https://app.sumit.co.il/accounting/documents/create/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(summitPayload)
       });
-
       const summitData = await summitRes.json();
+      console.timeEnd("SummitDocCreate");
       console.log("Summit response status:", summitRes.status);
       console.log("Summit response:", summitData);
     } catch (err) {
@@ -184,14 +195,8 @@ app.get("/callback", async (req, res) => {
     }
   }
 
-  const onward =
-    `https://puah.tfaforms.net/17` +
-    `?RegID=${encodeURIComponent(RegID)}` +
-    `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
-    `&Total=${encodeURIComponent(Total)}` +
-    `&Status=${encodeURIComponent(Status)}` +
-    `&phone=${encodeURIComponent(phone)}` +
-    `&Course=${encodeURIComponent(Course)}`;
+  // Always redirect to FormAssembly after callback is processed
+  console.log("Redirecting to FA:", onward);
   res.redirect(onward);
 });
 
