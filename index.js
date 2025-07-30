@@ -1,7 +1,10 @@
 const express = require("express");
 const fetch = require("node-fetch");
+const bodyParser = require("body-parser");
 
 const app = express();
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
 
 // ────────────────────────────────────────────────────────
 // 1) INIT PAYMENT
@@ -19,6 +22,8 @@ app.get("/", async (req, res) => {
 
   const paramX = `ML|${RegID}`;
   const baseCallback = `https://${req.get("host")}/callback`;
+  const serverCallback = `https://${req.get("host")}/pelecard-callback`;
+
   const commonQS =
     `?RegID=${encodeURIComponent(RegID)}` +
     `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
@@ -40,6 +45,8 @@ app.get("/", async (req, res) => {
     Total: total,
     GoodURL: `${baseCallback}${commonQS}&Status=approved`,
     ErrorURL: `${baseCallback}${commonQS}&Status=failed`,
+    ServerSideGoodFeedbackURL: serverCallback,
+    ServerSideErrorFeedbackURL: serverCallback,
     NotificationGoodMail: "ronyt@puah.org.il",
     NotificationErrorMail: "ronyt@puah.org.il",
     ParamX: paramX,
@@ -73,7 +80,22 @@ app.get("/", async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────
-// 2) CALLBACK (after user pays or fails)
+// 2) PELECARD CALLBACK POST
+// ────────────────────────────────────────────────────────
+let latestPelecardResponse = {};
+
+app.post("/pelecard-callback", (req, res) => {
+  const raw = req.body;
+  const resultData = raw?.ResultData || raw;
+
+  console.log("ServerSide callback from Pelecard:", resultData);
+
+  latestPelecardResponse[resultData?.TransactionId] = resultData;
+  res.status(200).send("OK");
+});
+
+// ────────────────────────────────────────────────────────
+// 3) CALLBACK (after user pays or fails)
 // ────────────────────────────────────────────────────────
 app.get("/callback", async (req, res) => {
   const {
@@ -86,12 +108,7 @@ app.get("/callback", async (req, res) => {
     CustomerName = "",
     CustomerEmail = "",
     phone = "",
-    Course = "",
-    Payments = "1",
-    FirstPaymentTotal = "",
-    FixedPaymentTotal = "",
-    TotalPayments = "1",
-    CreditCardNumber = ""
+    Course = ""
   } = req.query;
 
   console.log("Callback query received:", req.originalUrl);
@@ -106,12 +123,13 @@ app.get("/callback", async (req, res) => {
     `&Course=${encodeURIComponent(Course)}`;
 
   if (Status === "approved") {
+    const peleData = latestPelecardResponse[TransactionId] || {};
+    const totalPayments = parseInt(peleData?.TotalPayments || 1);
+    const firstPay = parseFloat(peleData?.FirstPaymentTotal || 0) / 100;
+    const fixedPay = parseFloat(peleData?.FixedPaymentTotal || 0) / 100;
+    const last4 = peleData?.CreditCardNumber?.replace(/\D/g, "").slice(-4) || "0000";
     const amount = parseFloat(Total) / 100;
     const courseClean = Course.replace(/^[\(]+|[\)]+$/g, "");
-    const totalPayments = parseInt(TotalPayments, 10) || 1;
-    const firstPay = parseFloat(FirstPaymentTotal || 0) / 100;
-    const fixedPay = parseFloat(FixedPaymentTotal || 0) / 100;
-    const last4 = CreditCardNumber?.replace(/\D/g, "").slice(-4) || "0000";
 
     let payments = [];
 
@@ -195,7 +213,6 @@ app.get("/callback", async (req, res) => {
     }
   }
 
-  // Always redirect to FormAssembly after callback is processed
   console.log("Redirecting to FA:", onward);
   res.redirect(onward);
 });
