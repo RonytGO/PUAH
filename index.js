@@ -123,11 +123,25 @@ app.get("/callback", async (req, res) => {
     `&Course=${encodeURIComponent(Course)}`;
 
   if (Status === "approved") {
-    const peleData = latestPelecardResponse[TransactionId] || {};
-    const totalPayments = parseInt(peleData?.TotalPayments || 1);
-    const firstPay = parseFloat(peleData?.FirstPaymentTotal || 0) / 100;
-    const fixedPay = parseFloat(peleData?.FixedPaymentTotal || 0) / 100;
-    const last4 = peleData?.CreditCardNumber?.replace(/\D/g, "").slice(-4) || "0000";
+    const peleData = latestPelecardResponse[TransactionId];
+
+    if (!peleData) {
+      console.error("No ResultData from Pelecard for TransactionId", TransactionId);
+      return res.redirect(onward);
+    }
+
+    const {
+      CreditCardNumber = "",
+      TotalPayments = 1,
+      FirstPaymentTotal = 0,
+      FixedPaymentTotal = 0,
+      ShvaResult = ""
+    } = peleData;
+
+    const last4 = CreditCardNumber.replace(/\D/g, "").slice(-4) || "0000";
+    const totalPayments = parseInt(TotalPayments) || 1;
+    const firstPay = parseFloat(FirstPaymentTotal || 0) / 100;
+    const fixedPay = parseFloat(FixedPaymentTotal || 0) / 100;
     const amount = parseFloat(Total) / 100;
     const courseClean = Course.replace(/^[\(]+|[\)]+$/g, "");
 
@@ -179,7 +193,8 @@ app.get("/callback", async (req, res) => {
           SendAsPaymentRequest: false
         },
         Type: 1,
-        ExternalReference: RegID
+        ExternalReference: RegID,
+        Comments: `ShvaResult: ${ShvaResult}`
       },
       Items: [
         {
