@@ -6,6 +6,9 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
+let latestPelecardResponse = {};
+let lastPelecardData = null;
+
 // ────────────────────────────────────────────────────────
 // 1) INIT PAYMENT
 // ────────────────────────────────────────────────────────
@@ -82,15 +85,28 @@ app.get("/", async (req, res) => {
 // ────────────────────────────────────────────────────────
 // 2) PELECARD CALLBACK POST
 // ────────────────────────────────────────────────────────
-let latestPelecardResponse = {};
-
 app.post("/pelecard-callback", (req, res) => {
-  const raw = req.body;
-  const resultData = raw?.ResultData || raw;
+  let body = req.body;
 
-  console.log("ServerSide callback from Pelecard:", resultData);
+  if (typeof body === "string") {
+    try {
+      body = JSON.parse(body);
+    } catch (e) {
+      console.error("Failed to parse Pelecard body JSON:", req.body);
+      return res.status(400).send("Bad JSON");
+    }
+  }
 
-  latestPelecardResponse[resultData?.TransactionId] = resultData;
+  const resultData = body?.ResultData || body;
+
+  if (resultData?.TransactionId) {
+    latestPelecardResponse[resultData.TransactionId] = resultData;
+    console.log("Stored callback for TransactionId:", resultData.TransactionId);
+  } else {
+    console.warn("Pelecard callback missing TransactionId:", resultData);
+  }
+
+  lastPelecardData = resultData;
   res.status(200).send("OK");
 });
 
@@ -111,8 +127,6 @@ app.get("/callback", async (req, res) => {
     Course = ""
   } = req.query;
 
-  console.log("Callback query received:", req.originalUrl);
-
   const onward =
     `https://puah.tfaforms.net/17` +
     `?RegID=${encodeURIComponent(RegID)}` +
@@ -122,11 +136,15 @@ app.get("/callback", async (req, res) => {
     `&phone=${encodeURIComponent(phone)}` +
     `&Course=${encodeURIComponent(Course)}`;
 
+  console.log("Callback triggered:", req.originalUrl);
+
   if (Status === "approved") {
-    const peleData = latestPelecardResponse[TransactionId];
+    console.log("Looking for TransactionId:", TransactionId);
+    const peleData = latestPelecardResponse[TransactionId] || lastPelecardData;
+    console.log("Found PeleData?", !!peleData);
 
     if (!peleData) {
-      console.error("No ResultData from Pelecard for TransactionId", TransactionId);
+      console.error("No Pelecard data found for TransactionId:", TransactionId);
       return res.redirect(onward);
     }
 
@@ -213,24 +231,24 @@ app.get("/callback", async (req, res) => {
     };
 
     try {
-      console.time("SummitDocCreate");
+      console.time("📤 SummitDocCreate");
       const summitRes = await fetch("https://app.sumit.co.il/accounting/documents/create/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(summitPayload)
       });
       const summitData = await summitRes.json();
-      console.timeEnd("SummitDocCreate");
+      console.timeEnd("📤 SummitDocCreate");
       console.log("Summit response status:", summitRes.status);
-      console.log("Summit response:", summitData);
+      console.dir(summitData, { depth: null });
     } catch (err) {
       console.error("Summit API error:", err);
     }
   }
 
-  console.log("Redirecting to FA:", onward);
+  console.log("🔁 Redirecting to FA:", onward);
   res.redirect(onward);
 });
 
 const port = process.env.PORT || 8080;
-app.listen(port, () => console.log("Listening on port", port));
+app.listen(port, () => console.log("🚀 Listening on port", port));
