@@ -3,14 +3,11 @@ const fetch = require("node-fetch");
 const bodyParser = require("body-parser");
 
 const app = express();
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.text({ type: "*/*" })); // Handle raw body for malformed JSON
 app.use(bodyParser.json());
 
-let latestPelecardResponse = {};
-let lastPelecardData = null;
-
 // ────────────────────────────────────────────────────────
-// 1) INIT PAYMENT
+// 1) INIT PAYMENT (IFRAME REDIRECT)
 // ────────────────────────────────────────────────────────
 app.get("/", async (req, res) => {
   const {
@@ -50,14 +47,9 @@ app.get("/", async (req, res) => {
     ErrorURL: `${baseCallback}${commonQS}&Status=failed`,
     ServerSideGoodFeedbackURL: serverCallback,
     ServerSideErrorFeedbackURL: serverCallback,
-    NotificationGoodMail: "ronyt@puah.org.il",
-    NotificationErrorMail: "ronyt@puah.org.il",
     ParamX: paramX,
     MaxPayments: "10",
-    MinPayments: "1",
-    FirstPayment: "auto",
-    FirstPaymentLock: "False",
-    FeedbackDataTransferMethod: "GET"
+    MinPayments: "1"
   };
 
   try {
@@ -66,189 +58,103 @@ app.get("/", async (req, res) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-
     const data = await peleRes.json();
-    console.log("Pelecard response:", data);
-
-    if (data.URL) {
-      return res.redirect(data.URL);
-    }
-
-    console.error("Pelecard init error:", data);
+    if (data.URL) return res.redirect(data.URL);
     res.status(500).send("Pelecard error: " + JSON.stringify(data));
   } catch (err) {
-    console.error("Server error:", err);
     res.status(500).send("Server error: " + err.message);
   }
 });
 
 // ────────────────────────────────────────────────────────
-// 2) PELECARD CALLBACK POST
+// 2) PELECARD SERVER CALLBACK (SUMMIT INTEGRATION)
 // ────────────────────────────────────────────────────────
-app.post("/pelecard-callback", (req, res) => {
-  let body = req.body;
+app.post("/pelecard-callback", async (req, res) => {
+  try {
+    // Handle malformed JSON from Pelecard
+    let rawBody = typeof req.body === "object" && !Buffer.isBuffer(req.body) 
+      ? JSON.stringify(req.body) 
+      : req.body;
 
-  if (typeof body === "string") {
-    try {
-      body = JSON.parse(body);
-    } catch (e) {
-      console.error("Failed to parse Pelecard body JSON:", req.body);
-      return res.status(400).send("Bad JSON");
-    }
-  }
+    const cleanedBody = rawBody
+      .replace(/'/g, '"')
+      .replace(/ResultData\s*:\s*\[([^[\]]+?)\]/g, 'ResultData:{$1}');
 
-  const resultData = body?.ResultData || body;
+    const body = JSON.parse(cleanedBody);
+    const resultData = body.ResultData || body;
 
-  if (resultData?.TransactionId) {
-    latestPelecardResponse[resultData.TransactionId] = resultData;
-    console.log("Stored callback for TransactionId:", resultData.TransactionId);
-  } else {
-    console.warn("Pelecard callback missing TransactionId:", resultData);
-  }
-
-  lastPelecardData = resultData;
-  res.status(200).send("OK");
-});
-
-// ────────────────────────────────────────────────────────
-// 3) CALLBACK (after user pays or fails)
-// ────────────────────────────────────────────────────────
-app.get("/callback", async (req, res) => {
-  const {
-    RegID = "",
-    FAResponseID = "",
-    Total = "",
-    Status = "",
-    TransactionId = "",
-    ConfirmationKey = "",
-    CustomerName = "",
-    CustomerEmail = "",
-    phone = "",
-    Course = ""
-  } = req.query;
-
-  const onward =
-    `https://puah.tfaforms.net/17` +
-    `?RegID=${encodeURIComponent(RegID)}` +
-    `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
-    `&Total=${encodeURIComponent(Total)}` +
-    `&Status=${encodeURIComponent(Status)}` +
-    `&phone=${encodeURIComponent(phone)}` +
-    `&Course=${encodeURIComponent(Course)}`;
-
-  console.log("Callback triggered:", req.originalUrl);
-
-  if (Status === "approved") {
-    console.log("Looking for TransactionId:", TransactionId);
-    const peleData = latestPelecardResponse[TransactionId] || lastPelecardData;
-    console.log("Found PeleData?", !!peleData);
-
-    if (!peleData) {
-      console.error("No Pelecard data found for TransactionId:", TransactionId);
-      return res.redirect(onward);
+    if (!resultData?.TransactionId) {
+      console.error("Invalid Pelecard callback:", cleanedBody);
+      return res.status(400).send("Missing TransactionId");
     }
 
-    const {
-      CreditCardNumber = "",
-      TotalPayments = 1,
-      FirstPaymentTotal = 0,
-      FixedPaymentTotal = 0,
-      ShvaResult = ""
-    } = peleData;
+    // Debug: Log full payload
+    console.log("Pelecard Data:", JSON.stringify(resultData, null, 2));
 
-    const last4 = CreditCardNumber.replace(/\D/g, "").slice(-4) || "0000";
-    const totalPayments = parseInt(TotalPayments) || 1;
-    const firstPay = parseFloat(FirstPaymentTotal || 0) / 100;
-    const fixedPay = parseFloat(FixedPaymentTotal || 0) / 100;
-    const amount = parseFloat(Total) / 100;
-    const courseClean = Course.replace(/^[\(]+|[\)]+$/g, "");
+    // Process payment data
+    const last4 = (resultData.CreditCardNumber || "").split("*").pop() || "0000";
+    const amount = parseFloat(resultData.DebitTotal || "0") / 100;
+    const regId = (resultData.AdditionalDetailsParamX || "").split("|")[1] || "";
 
-    let payments = [];
-
-    if (totalPayments > 1 && fixedPay > 0 && firstPay > 0) {
-      payments.push({
-        Amount: firstPay,
-        Type: "CreditCard",
-        Details_CreditCard: {
-          Last4Digits: last4,
-          NumberOfPayments: totalPayments
-        }
-      });
-
-      for (let i = 1; i < totalPayments; i++) {
-        payments.push({
-          Amount: fixedPay,
-          Type: "CreditCard",
-          Details_CreditCard: {
-            Last4Digits: last4,
-            NumberOfPayments: totalPayments
-          }
-        });
-      }
-    } else {
-      payments.push({
-        Amount: amount,
-        Type: "CreditCard",
-        Details_CreditCard: {
-          Last4Digits: last4,
-          NumberOfPayments: 1
-        }
-      });
-    }
-
+    // Submit to Summit
     const summitPayload = {
       Details: {
         Date: new Date().toISOString(),
         Customer: {
-          ExternalIdentifier: FAResponseID,
-          SearchMode: 0,
-          Name: CustomerName || "Unknown",
-          EmailAddress: CustomerEmail || "unknown@puah.org.il"
-        },
-        SendByEmail: {
-          EmailAddress: CustomerEmail || "unknown@puah.org.il",
-          Original: true,
-          SendAsPaymentRequest: false
+          ExternalIdentifier: regId,
+          Name: resultData.CardHolderName || "Unknown",
+          EmailAddress: resultData.CardHolderEmail || "unknown@puah.org.il"
         },
         Type: 1,
-        ExternalReference: RegID,
-        Comments: `ShvaResult: ${ShvaResult}`
+        ExternalReference: regId,
+        Comments: `Payment via Pelecard (TXN: ${resultData.TransactionId})`
       },
-      Items: [
-        {
-          Quantity: 1,
-          UnitPrice: amount,
-          TotalPrice: amount,
-          Item: { Name: courseClean || "קורס" }
+      Payments: [{
+        Amount: amount,
+        Type: "CreditCard",
+        Details_CreditCard: {
+          Last4Digits: last4,
+          NumberOfPayments: parseInt(resultData.TotalPayments || "1")
         }
-      ],
-      Payments: payments,
-      VATIncluded: true,
+      }],
       Credentials: {
         CompanyID: parseInt(process.env.SUMMIT_COMPANY_ID, 10),
         APIKey: process.env.SUMMIT_API_KEY
       }
     };
 
-    try {
-      console.time("📤 SummitDocCreate");
-      const summitRes = await fetch("https://app.sumit.co.il/accounting/documents/create/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(summitPayload)
-      });
-      const summitData = await summitRes.json();
-      console.timeEnd("📤 SummitDocCreate");
-      console.log("Summit response status:", summitRes.status);
-      console.dir(summitData, { depth: null });
-    } catch (err) {
-      console.error("Summit API error:", err);
-    }
-  }
+    console.log("Summit Payload:", JSON.stringify(summitPayload, null, 2));
+    const summitRes = await fetch("https://app.sumit.co.il/accounting/documents/create/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(summitPayload)
+    });
+    
+    const summitData = await summitRes.json();
+    console.log("📩 Summit Response:", summitData);
+    res.status(200).send("OK");
 
-  console.log("🔁 Redirecting to FA:", onward);
+  } catch (err) {
+    console.error(" Pelecard Callback Error:", err);
+    res.status(500).send("Server Error");
+  }
+});
+
+// ────────────────────────────────────────────────────────
+// 3) USER REDIRECT (AFTER PAYMENT)
+// ────────────────────────────────────────────────────────
+app.get("/callback", (req, res) => {
+  const { Status, RegID, FAResponseID, Total, phone, Course } = req.query;
+  const onward = `https://puah.tfaforms.net/17` +
+    `?RegID=${encodeURIComponent(RegID)}` +
+    `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
+    `&Total=${encodeURIComponent(Total)}` +
+    `&Status=${encodeURIComponent(Status)}` +
+    `&phone=${encodeURIComponent(phone)}` +
+    `&Course=${encodeURIComponent(Course)}`;
   res.redirect(onward);
 });
 
+// Start server
 const port = process.env.PORT || 8080;
-app.listen(port, () => console.log("🚀 Listening on port", port));
+app.listen(port, () => console.log("Server running on port", port));
