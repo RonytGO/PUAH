@@ -1,18 +1,22 @@
-# Use the official Node.js 18 image
+# Use official Node 18
 FROM node:18
 
-# Create app directory
+# App dir
 WORKDIR /usr/src/app
 
-# Copy app files
+# Install deps first (better layer caching)
 COPY package*.json ./
-COPY index.js ./
+# Prefer CI when lockfile exists; fall back to install
+RUN npm ci --omit=dev || npm install --omit=dev
 
-# Install dependencies
-RUN npm install
+# Copy the rest of the app (this includes db.js!)
+COPY . .
 
-# Expose port (Cloud Run will assign it)
+# Optional (Cloud Run ignores EXPOSE, but harmless)
 EXPOSE 8080
 
-# Start app
-CMD [ "npm", "start" ]
+# Production env
+ENV NODE_ENV=production
+
+# Start
+CMD ["npm", "start"]
