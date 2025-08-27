@@ -11,15 +11,17 @@ app.use(bodyParser.text({ type: "*/*" }));
 app.use(bodyParser.json());
 
 /** Fail fast if DB not reachable (once at boot) */
+// NON-BLOCKING STARTUP CHECK (SERVICE STILL STARTS)
 (async () => {
   try {
-    const { rows } = await pool.query("SELECT 1 AS ok");
-    console.log("DB connected:", rows[0]);
+    const { rows } = await pool.query('SELECT 1 AS ok');
+    console.log('DB connected at startup:', rows[0]);
   } catch (e) {
-    console.error("DB connect failed:", e);
-    process.exit(1);
+    console.error('DB check failed at startup (service will still start):', e.message);
+    console.error('→ Verify Cloud SQL connection + env vars; use /db-ping to test.');
   }
 })();
+
 
 /** Quick health route to confirm DB + networking */
 app.get("/db-ping", async (_req, res) => {
