@@ -1,3 +1,19 @@
+// Connecting to the sql in the cloud
+
+const { pool } = require('./db');
+
+// optional: fail fast if DB not reachable
+(async () => {
+  try {
+    const { rows } = await pool.query('SELECT 1 AS ok');
+    console.log('DB connected:', rows[0]);
+  } catch (e) {
+    console.error('DB connect failed:', e);
+    process.exit(1);
+  }
+})();
+
+
 const express = require("express");
 const fetch = require("node-fetch");
 const bodyParser = require("body-parser");
