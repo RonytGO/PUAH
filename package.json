@@ -10,3 +10,18 @@
     "node-fetch": "^2.6.7"
   }
 }
+
+{
+  "name": "puah-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node index.js" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-fetch": "^2.7.0",
+    "body-parser": "^1.20.2",
+    "pg": "^8.12.0"
+  }
+}
