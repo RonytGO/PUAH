@@ -9,6 +9,74 @@ const app = express();
 app.use(bodyParser.text({ type: "*/*" }));
 app.use(bodyParser.json());
 
+// ---------- Helpers ----------
+const toInt = (v) => {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const cleaned = s.replace(/[^\d-]/g, ""); // keep digits and minus
+  if (!cleaned) return null;
+  const n = parseInt(cleaned, 10);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** Return amount in MINOR units (agorot). Accepts 6500, "6500", 65.00, "65.00", "65,00" */
+const parseMinorAmount = (val) => {
+  if (val === null || val === undefined) return null;
+  if (typeof val === "number") {
+    return Number.isInteger(val) ? val : Math.round(val * 100);
+  }
+  const s = String(val).trim();
+  if (!s) return null;
+  const sDot = s.replace(",", "."); // handle "65,00"
+  if (/^\d+(\.\d+)?$/.test(sDot)) {
+    // numeric string, maybe decimal (major units)
+    const f = parseFloat(sDot);
+    return Number.isFinite(f) ? Math.round(f * 100) : null;
+  }
+  // fallback: strip non-digits (assume already minor)
+  const digits = s.replace(/[^\d]/g, "");
+  if (!digits) return null;
+  const n = parseInt(digits, 10);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** Extract minor amount from a Pelecard-like result object */
+const extractMinorAmount = (rd) => {
+  const fields = [
+    "TotalMinor",
+    "AmountMinor",
+    "TotalAmountMinor",
+    "Total",
+    "TotalAmount",
+    "Amount",
+    "TransactionAmount"
+  ];
+  for (const f of fields) {
+    const n = parseMinorAmount(rd[f]);
+    if (n !== null) return n;
+  }
+  return null;
+};
+
+/** Parse number of payments; checks several fields incl. JParam */
+const parsePayments = (rd) => {
+  const direct = ["TotalPayments", "NumberOfPayments", "Payments", "PaymentsNum"];
+  for (const f of direct) {
+    const n = toInt(rd[f]);
+    if (n && n > 0) return n;
+  }
+  // Heuristic: JParam may contain "3" or "מספר תשלומים: 3"
+  if (rd.JParam) {
+    const m = String(rd.JParam).match(/(\d{1,2})/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > 0) return n;
+    }
+  }
+  return 1;
+};
+
 // Non-blocking DB check
 (async () => {
   try {
@@ -32,7 +100,7 @@ app.get("/db-ping", async (_req, res) => {
 // 1) INIT PAYMENT (store registration; redirect to Pelecard)
 app.get("/", async (req, res) => {
   const {
-    total = "6500",
+    total = "6500", // prefer minor units from FA if you can
     RegID = "",
     FAResponseID = "",
     CustomerName = "",
@@ -54,19 +122,20 @@ app.get("/", async (req, res) => {
     `&Course=${encodeURIComponent(Course)}` +
     `&Total=${encodeURIComponent(total)}`;
 
-  // Upsert registration for later use by webhook
+  // Upsert registration (store FA total as-is for fallback)
   try {
     await pool.query(
-      `INSERT INTO registrations (reg_id, fa_response_id, customer_name, customer_email, phone, course)
-       VALUES ($1,$2,$3,$4,$5,$6)
+      `INSERT INTO registrations (reg_id, fa_response_id, customer_name, customer_email, phone, course, total)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (reg_id) DO UPDATE
        SET fa_response_id = EXCLUDED.fa_response_id,
            customer_name  = EXCLUDED.customer_name,
            customer_email = EXCLUDED.customer_email,
            phone          = EXCLUDED.phone,
            course         = EXCLUDED.course,
+           total          = EXCLUDED.total,
            updated_at     = now()`,
-      [RegID, FAResponseID, CustomerName, CustomerEmail, phone, Course]
+      [RegID, FAResponseID, CustomerName, CustomerEmail, phone, Course, total]
     );
   } catch (e) {
     console.error("registrations upsert failed:", e);
@@ -100,194 +169,4 @@ app.get("/", async (req, res) => {
     });
     const data = await peleRes.json();
     if (data.URL) return res.redirect(data.URL);
-    res.status(500).send("Pelecard error: " + JSON.stringify(data));
-  } catch (err) {
-    res.status(500).send("Server error: " + err.message);
-  }
-});
-
-// 2) PELECARD WEBHOOK (authoritative; creates Summit doc idempotently)
-app.post("/pelecard-callback", async (req, res) => {
-  try {
-    // Normalize body -> object
-    let bodyObj;
-    if (typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
-      bodyObj = req.body;
-    } else {
-      const raw = String(req.body || "")
-        .replace(/'/g, '"')
-        .replace(/ResultData\s*:\s*\[([^[\]]+?)\]/g, 'ResultData:{$1}');
-      bodyObj = JSON.parse(raw);
-    }
-    const rd = bodyObj.ResultData || bodyObj;
-
-    const regId = (rd.AdditionalDetailsParamX || "").split("|")[1] || "";
-    const txId = rd.TransactionId || null;
-    const shva = rd.ShvaResult || "";
-    const status = shva === "000" ? "approved" : "failed";
-    const amountMinor = parseInt(rd.Total || "0", 10);
-    const payments = parseInt(rd.TotalPayments || "1", 10);
-    const last4 = (rd.CreditCardNumber || "").split("*").pop() || "0000";
-    const errorMsg = rd.ErrorMessage || bodyObj.ErrorMessage || "";
-
-    // Audit webhook
-    await pool.query(
-      `INSERT INTO callback_events (reg_id, kind, raw_payload, headers)
-       VALUES ($1,$2,$3,$4)`,
-      [regId || null, "pelecard_server", bodyObj, req.headers]
-    );
-
-    // Upsert payment attempt by TransactionId
-    if (txId) {
-      await pool.query(
-        `INSERT INTO payment_attempts
-           (reg_id, status, amount_minor, total_payments, last4,
-            pelecard_transaction_id, shva_result, approve_number, confirmation_key,
-            error_message, raw_payload)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (pelecard_transaction_id) DO UPDATE
-         SET status = EXCLUDED.status,
-             amount_minor = EXCLUDED.amount_minor,
-             total_payments = EXCLUDED.total_payments,
-             last4 = EXCLUDED.last4,
-             shva_result = EXCLUDED.shva_result,
-             approve_number = EXCLUDED.approve_number,
-             confirmation_key = EXCLUDED.confirmation_key,
-             error_message = EXCLUDED.error_message,
-             raw_payload = EXCLUDED.raw_payload`,
-        [
-          regId, status, amountMinor, payments, last4,
-          txId, shva || null, rd.DebitApproveNumber || null,
-          rd.ConfirmationKey || null, errorMsg || null, bodyObj
-        ]
-      );
-    }
-
-    // Create Summit doc here (idempotent by txId)
-    if (txId) {
-      const { rows: existing } = await pool.query(
-        `SELECT 1 FROM summit_documents WHERE pelecard_transaction_id = $1 LIMIT 1`,
-        [txId]
-      );
-      if (!existing[0]) {
-        const { rows: regRows } = await pool.query(
-          `SELECT fa_response_id, customer_name, customer_email, phone, course
-           FROM registrations WHERE reg_id = $1 LIMIT 1`,
-          [regId]
-        );
-        const r = regRows[0] || {};
-        const amount = (amountMinor || 0) / 100;
-        const courseClean = (r?.course || "").replace(/^[\(]+|[\)]+$/g, "");
-        const isApproved = status === "approved";
-
-        const summitPayload = {
-          Details: {
-            Date: new Date().toISOString(),
-            Customer: {
-              ExternalIdentifier: r?.fa_response_id || "",
-              Name: r?.customer_name || "Unknown",
-              EmailAddress: r?.customer_email || "unknown@puah.org.il"
-            },
-            Type: isApproved ? 1 : 3,
-            Comments: isApproved
-              ? `Pelecard Status: approved`
-              : `Pelecard Status: failed; Error: ${errorMsg || "N/A"}`,
-            ExternalReference: regId
-          },
-          Items: isApproved
-            ? [{ Quantity: 1, UnitPrice: amount, TotalPrice: amount, Item: { Name: courseClean || "קורס" } }]
-            : [],
-          Payments: isApproved
-            ? [{ Amount: amount, Type: "CreditCard",
-                 Details_CreditCard: { Last4Digits: last4, NumberOfPayments: payments } }]
-            : [],
-          VATIncluded: true,
-          Credentials: {
-            CompanyID: parseInt(process.env.SUMMIT_COMPANY_ID, 10),
-            APIKey: process.env.SUMMIT_API_KEY
-          }
-        };
-
-        try {
-          const summitRes = await fetch(
-            "https://app.sumit.co.il/accounting/documents/create/",
-            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(summitPayload) }
-          );
-          const summitData = await summitRes.json();
-
-          await pool.query(
-            `INSERT INTO summit_documents
-               (reg_id, fa_response_id, status, amount_minor, summit_doc_id, raw_response, pelecard_transaction_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-            [
-              regId,
-              r?.fa_response_id || null,
-              status,
-              amountMinor || 0,
-              summitData?.DocumentID || null,
-              summitData,
-              txId
-            ]
-          );
-        } catch (e) {
-          console.error("Summit create (webhook) failed:", e);
-        }
-      }
-    }
-
-    // Always 200 to avoid gateway retries storm
-    res.status(200).send("OK");
-  } catch (err) {
-    console.error("Pelecard Callback Error:", err);
-    res.status(200).send("OK");
-  }
-});
-
-// 3) CLIENT REDIRECT (no doc creation here)
-app.get("/callback", async (req, res) => {
-  const {
-    Status = "",
-    RegID = "",
-    FAResponseID = "",
-    Total = "",
-    phone = "",
-    Course = ""
-  } = req.query;
-
-  // Audit redirect
-  try {
-    await pool.query(
-      `INSERT INTO callback_events (reg_id, kind, raw_payload, headers)
-       VALUES ($1,$2,$3,$4)`,
-      [RegID || null, "client_redirect", req.query, req.headers]
-    );
-  } catch (e) {
-    console.error("callback_events insert (client_redirect) failed:", e);
-  }
-
-  // Best-effort error message for onward URL
-  let errMsg = "";
-  try {
-    const { rows } = await pool.query(
-      `SELECT error_message FROM payment_attempts
-       WHERE reg_id = $1 ORDER BY created_at DESC LIMIT 1`,
-      [RegID]
-    );
-    errMsg = rows[0]?.error_message || "";
-  } catch {}
-
-  const onward =
-    `https://puah.tfaforms.net/17` +
-    `?RegID=${encodeURIComponent(RegID)}` +
-    `&FAResponseID=${encodeURIComponent(FAResponseID)}` +
-    `&Total=${encodeURIComponent(Total)}` +
-    `&Status=${encodeURIComponent(Status)}` +
-    `&phone=${encodeURIComponent(phone)}` +
-    `&Course=${encodeURIComponent(Course)}` +
-    `&ErrorMessage=${encodeURIComponent(errMsg)}`;
-
-  res.redirect(onward);
-});
-
-const port = process.env.PORT || 8080;
-app.listen(port, () => console.log("Server running on port", port));
+    re
