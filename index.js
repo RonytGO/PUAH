@@ -5,11 +5,11 @@ const { pool } = require("./db");
 
 const app = express();
 
-// קבלה של payloadים "מוזרים" מפלאקארד
+// Accept odd Pelecard payloads
 app.use(bodyParser.text({ type: "*/*" }));
 app.use(bodyParser.json());
 
-// --- Helpers פשוטים ---
+// --- minimal helpers (no fancy amount transforms) ---
 const toInt = (v) => {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
@@ -18,7 +18,7 @@ const toInt = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-// סכום במאות (אגורות) — לוקח ישירות מפלאקארד, בלי המרות "חכמות"
+// Amount (minor units): prefer DebitTotal, else *Minor, else Total (digits-only → minor)
 const getAmountMinor = (rd) => {
   const cand = [rd.DebitTotal, rd.TotalMinor, rd.AmountMinor, rd.Total];
   for (const c of cand) {
@@ -28,7 +28,7 @@ const getAmountMinor = (rd) => {
   return 0;
 };
 
-// תשלומים
+// Installments: common fields; fallback to first number in JParam; else 1
 const getPayments = (rd) => {
   for (const f of ["TotalPayments", "NumberOfPayments", "Payments", "PaymentsNum"]) {
     const n = toInt(rd[f]);
@@ -44,7 +44,10 @@ const getPayments = (rd) => {
   return 1;
 };
 
-// בדיקת DB לא חוסמת
+// --- NEW: unwrap Summit envelope { Data: {...}, Status, ... } ---
+const unwrapSummit = (obj) => (obj && typeof obj === "object" && obj.Data ? obj.Data : obj || {});
+
+// Non-blocking DB check
 (async () => {
   try {
     const { rows } = await pool.query("SELECT 1 AS ok");
@@ -63,10 +66,10 @@ app.get("/db-ping", async (_req, res) => {
   }
 });
 
-// 1) INIT (שומר רישום ומפנה לפלאקארד)
+// 1) INIT PAYMENT (store registration; redirect to Pelecard)
 app.get("/", async (req, res) => {
   const {
-    total = "6500", // עדיף מאה (אגורות) מה-FA
+    total = "6500", // expect minor units; pass-through to Pelecard
     RegID = "",
     FAResponseID = "",
     CustomerName = "",
@@ -88,7 +91,6 @@ app.get("/", async (req, res) => {
     `&Course=${encodeURIComponent(Course)}` +
     `&Total=${encodeURIComponent(total)}`;
 
-  // שמירת נתוני הרישום (כולל total) לשימוש מאוחר יותר
   try {
     await pool.query(
       `INSERT INTO registrations (reg_id, fa_response_id, customer_name, customer_email, phone, course, total)
@@ -141,10 +143,10 @@ app.get("/", async (req, res) => {
   }
 });
 
-// 2) Webhook מפלאקארד — יוצר מסמך ב-Summit (כולל שליחה במייל) ושומר ReceiptURL
+// 2) PELECARD WEBHOOK (create + email Summit doc; store ReceiptURL)
 app.post("/pelecard-callback", async (req, res) => {
   try {
-    // נרמול גוף הבקשה
+    // Normalize body
     let bodyObj;
     if (typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
       bodyObj = req.body;
@@ -161,9 +163,10 @@ app.post("/pelecard-callback", async (req, res) => {
     const shva = rd.ShvaResult || rd.StatusCode || "";
     const status = (shva === "000" || shva === "0") ? "approved" : "failed";
 
-    // סכום במאה (אגורות) + מספר תשלומים
+    // Use Pelecard amount (minor) + payments as-is
     let amountMinor = getAmountMinor(rd);
     if (!amountMinor || amountMinor <= 0) {
+      // fallback to FA stored total (minor)
       try {
         const { rows } = await pool.query(`SELECT total FROM registrations WHERE reg_id = $1 LIMIT 1`, [regId]);
         const faMinor = toInt(rows[0]?.total);
@@ -177,14 +180,14 @@ app.post("/pelecard-callback", async (req, res) => {
     const last4 = (rd.CreditCardNumber || "").split("*").pop() || "0000";
     const errorMsg = rd.ErrorMessage || bodyObj.ErrorMessage || rd.StatusMessage || "";
 
-    // לוג לאודיט
+    // Audit webhook
     await pool.query(
       `INSERT INTO callback_events (reg_id, kind, raw_payload, headers)
        VALUES ($1,$2,$3,$4)`,
       [regId || null, "pelecard_server", bodyObj, req.headers]
     );
 
-    // upsert של נסיון תשלום
+    // Upsert payment attempt
     if (txId) {
       await pool.query(
         `INSERT INTO payment_attempts
@@ -210,9 +213,9 @@ app.post("/pelecard-callback", async (req, res) => {
       );
     }
 
-    // יצירת מסמך + שליחה ללקוח (SendByEmail) — מאושר בלבד
+    // Create + email (approved only)
     if (txId && status === "approved") {
-      // מניעת כפילויות
+      // Idempotency
       const { rows: existing } = await pool.query(
         `SELECT summit_doc_id FROM summit_documents WHERE pelecard_transaction_id = $1 LIMIT 1`,
         [txId]
@@ -220,7 +223,7 @@ app.post("/pelecard-callback", async (req, res) => {
       let summitDocId = existing[0]?.summit_doc_id || null;
 
       if (!summitDocId) {
-        // פרטי לקוח מהרישום
+        // Registration details (email, name, course, FA external id)
         let r = {};
         if (regId) {
           const { rows: regRows } = await pool.query(
@@ -231,11 +234,12 @@ app.post("/pelecard-callback", async (req, res) => {
           r = regRows[0] || {};
         }
 
-        const amount = (amountMinor || toInt(r.total) || 0) / 100; // סכום בשקלים למסמך
+        // Major units for Summit once
+        const amount = (amountMinor || toInt(r.total) || 0) / 100;
         const courseClean = (r?.course || "").replace(/^[\(]+|[\)]+$/g, "");
         const emailTo = (r?.customer_email || rd.CardHolderEmail || "").trim();
 
-        // יצירה + שליחה במייל בתוך אותה קריאה (SendByEmail)
+        // ---- SUMMIT CREATE with SendByEmail ----
         const summitPayload = {
           Details: {
             Date: new Date().toISOString(),
@@ -247,7 +251,7 @@ app.post("/pelecard-callback", async (req, res) => {
             SendByEmail: emailTo
               ? { EmailAddress: emailTo, Original: true, SendAsPaymentRequest: false }
               : undefined,
-            Type: 1,
+            Type: 1, // approved
             Comments: `Pelecard Status: approved | Transaction: ${txId}`,
             ExternalReference: regId || txId
           },
@@ -259,7 +263,8 @@ app.post("/pelecard-callback", async (req, res) => {
           }],
           Payments: [{
             Amount: amount,
-            Type: 5, // כרטיס אשראי (לפי הדוגמה שלך)
+            // Summit accepts numeric codes; 5 = Credit Card (matches your working example)
+            Type: 5,
             Details_CreditCard: {
               Last4Digits: last4,
               NumberOfPayments: payments
@@ -272,22 +277,26 @@ app.post("/pelecard-callback", async (req, res) => {
           }
         };
 
+        // --- CREATE & UNWRAP { Data: {...} } ---
         const summitRes = await fetch(
           "https://app.sumit.co.il/accounting/documents/create/",
           { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(summitPayload) }
         );
 
-        let summitData;
+        // keep full envelope for auditing, but use unwrapped Data to read fields
+        const summitEnvelopeRaw = await summitRes.text();
+        let summitEnvelope;
         try {
-          summitData = await summitRes.json();
+          summitEnvelope = JSON.parse(summitEnvelopeRaw);
         } catch {
-          summitData = { raw: await summitRes.text() };
+          summitEnvelope = { raw: summitEnvelopeRaw };
         }
+        const sd = unwrapSummit(summitEnvelope); // <<<<<< THE ONLY LOGIC CHANGE
 
-        summitDocId = summitData?.DocumentID || null;
-        const receiptUrl = summitData?.DocumentDownloadURL || null;
+        summitDocId = sd?.DocumentID || null;
+        const receiptUrl = sd?.DocumentDownloadURL || null;
 
-        // שמירה, כולל ReceiptURL
+        // Persist (store full envelope; save receipt_url)
         await pool.query(
           `INSERT INTO summit_documents
              (reg_id, fa_response_id, status, amount_minor, summit_doc_id, raw_response, pelecard_transaction_id, receipt_url)
@@ -302,29 +311,31 @@ app.post("/pelecard-callback", async (req, res) => {
             "approved",
             amountMinor || 0,
             summitDocId,
-            summitData,
+            summitEnvelope,   // full envelope for debugging
             txId,
             receiptUrl
           ]
         );
 
-        console.log("Summit create response:", summitData);
+        console.log("Summit create response (unwrapped):", {
+          DocumentID: summitDocId,
+          DocumentDownloadURL: receiptUrl
+        });
       }
     }
 
     res.status(200).send("OK");
   } catch (err) {
     console.error("Pelecard Callback Error:", err);
-    // כדי שפלאקארד לא יציף ריטריים
+    // still 200 so Pelecard doesn't spam retries
     res.status(200).send("OK");
   }
 });
 
-// 3) Redirect ל-FA — מוסיף ReceiptURL אם יש כבר בבסיס
+// 3) CLIENT REDIRECT (no doc creation here) — includes ReceiptURL param if present
 app.get("/callback", async (req, res) => {
   const { Status = "", RegID = "", FAResponseID = "", Total = "", phone = "", Course = "" } = req.query;
 
-  // לוג לאודיט
   try {
     await pool.query(
       `INSERT INTO callback_events (reg_id, kind, raw_payload, headers)
@@ -335,7 +346,7 @@ app.get("/callback", async (req, res) => {
     console.error("callback_events insert (client_redirect) failed:", e);
   }
 
-  // נסה להביא ReceiptURL שנשמר ב-webhook (ייתכן מרוץ זמנים — best effort)
+  // get latest receipt_url if exists
   let receiptUrl = "";
   try {
     const { rows } = await pool.query(
