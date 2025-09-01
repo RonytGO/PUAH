@@ -78,7 +78,7 @@ app.get("/", async (req, res) => {
     Course = ""
   } = req.query;
 
-  const paramX = `ML|${RegID}`;
+  const paramX = `${RegID}`;
   const baseCallback = `https://${req.get("host")}/callback`;
   const serverCallback = `https://${req.get("host")}/pelecard-callback`;
 
