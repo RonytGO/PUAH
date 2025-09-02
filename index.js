@@ -44,8 +44,17 @@ const getPayments = (rd) => {
   return 1;
 };
 
-// --- NEW: unwrap Summit envelope { Data: {...}, Status, ... } ---
+// --- unwrap Summit envelope { Data: {...}, Status, ... } ---
 const unwrapSummit = (obj) => (obj && typeof obj === "object" && obj.Data ? obj.Data : obj || {});
+
+// --- NEW: robust ParamX/AdditionalDetailsParamX parsing ---
+const extractRegId = (rd) => {
+  const raw = String(rd.AdditionalDetailsParamX || rd.ParamX || "").trim();
+  if (!raw) return "";
+  if (!raw.includes("|")) return raw;                // supports ParamX="<RegID>"
+  const parts = raw.split("|").filter(Boolean);     // supports "ML|<RegID>"
+  return parts[1] || parts[0] || "";
+};
 
 // Non-blocking DB check
 (async () => {
@@ -124,7 +133,7 @@ app.get("/", async (req, res) => {
     NotificationErrorMail: "ronyt@puah.org.il",
     ServerSideGoodFeedbackURL: serverCallback,
     ServerSideErrorFeedbackURL: serverCallback,
-    ParamX: paramX,
+    ParamX: paramX, // plain RegID is OK; webhook now handles both formats
     MaxPayments: "10",
     MinPayments: "1"
   };
@@ -158,7 +167,8 @@ app.post("/pelecard-callback", async (req, res) => {
     }
     const rd = bodyObj.ResultData || bodyObj.Result || bodyObj;
 
-    const regId = (rd.AdditionalDetailsParamX || rd.ParamX || "").split("|")[1] || "";
+    // FIX: support "ML|<RegID>" and "<RegID>"
+    const regId = extractRegId(rd);
     const txId = rd.TransactionId || null;
     const shva = rd.ShvaResult || rd.StatusCode || "";
     const status = (shva === "000" || shva === "0") ? "approved" : "failed";
@@ -166,7 +176,6 @@ app.post("/pelecard-callback", async (req, res) => {
     // Use Pelecard amount (minor) + payments as-is
     let amountMinor = getAmountMinor(rd);
     if (!amountMinor || amountMinor <= 0) {
-      // fallback to FA stored total (minor)
       try {
         const { rows } = await pool.query(`SELECT total FROM registrations WHERE reg_id = $1 LIMIT 1`, [regId]);
         const faMinor = toInt(rows[0]?.total);
@@ -175,7 +184,9 @@ app.post("/pelecard-callback", async (req, res) => {
         console.error("fallback amount query failed:", e.message);
       }
     }
-    const payments = getPayments(rd);
+    
+    const payments = Math.max(1, getPayments(rd) || 1);
+
 
     const last4 = (rd.CreditCardNumber || "").split("*").pop() || "0000";
     const errorMsg = rd.ErrorMessage || bodyObj.ErrorMessage || rd.StatusMessage || "";
@@ -234,19 +245,24 @@ app.post("/pelecard-callback", async (req, res) => {
           r = regRows[0] || {};
         }
 
+        // --- NEW: robust fallbacks so data can't be blank if rd has it ---
+        const name    = (r?.customer_name || rd.CustomerName || "Unknown").trim();
+        const emailTo = (r?.customer_email || rd.CustomerEmail || "unknown@puah.org.il").trim();
+        const extId   = (r?.fa_response_id || rd.FAResponseID || "").toString();
+        const courseRaw = (r?.course || rd.Course || "קורס");
+        const courseClean = (courseRaw || "").replace(/^[\(]+|[\)]+$/g, "") || "קורס";
+
         // Major units for Summit once
-        const amount = (amountMinor || toInt(r.total) || 0) / 100;
-        const courseClean = (r?.course || "").replace(/^[\(]+|[\)]+$/g, "");
-        const emailTo = (r?.customer_email || rd.CardHolderEmail || "").trim();
+        const amount = (amountMinor || toInt(r?.total) || 0) / 100;
 
         // ---- SUMMIT CREATE with SendByEmail ----
         const summitPayload = {
           Details: {
             Date: new Date().toISOString(),
             Customer: {
-              ExternalIdentifier: r?.fa_response_id || "",
-              Name: r?.customer_name || "Unknown",
-              EmailAddress: emailTo || "unknown@puah.org.il"
+              ExternalIdentifier: extId,
+              Name: name,
+              EmailAddress: emailTo
             },
             SendByEmail: emailTo
               ? { EmailAddress: emailTo, Original: true, SendAsPaymentRequest: false }
@@ -259,17 +275,17 @@ app.post("/pelecard-callback", async (req, res) => {
             Quantity: 1,
             UnitPrice: amount,
             TotalPrice: amount,
-            Item: { Name: courseClean || "קורס" }
+            Item: { Name: courseClean }
           }],
           Payments: [{
-            Amount: amount,
-            // Summit accepts numeric codes; 5 = Credit Card (matches your working example)
-            Type: 5,
+            Amount: amount,      // major units (e.g., 49.00 -> 49)
+            Type: 5,             // credit card
             Details_CreditCard: {
               Last4Digits: last4,
-              NumberOfPayments: payments
+              Payments: payments // <-- correct key (NOT NumberOfPayments)
             }
-          }],
+            }],
+
           VATIncluded: true,
           Credentials: {
             CompanyID: parseInt(process.env.SUMMIT_COMPANY_ID, 10),
@@ -291,7 +307,7 @@ app.post("/pelecard-callback", async (req, res) => {
         } catch {
           summitEnvelope = { raw: summitEnvelopeRaw };
         }
-        const sd = unwrapSummit(summitEnvelope); // <<<<<< THE ONLY LOGIC CHANGE
+        const sd = unwrapSummit(summitEnvelope);
 
         summitDocId = sd?.DocumentID || null;
         const receiptUrl = sd?.DocumentDownloadURL || null;
@@ -307,7 +323,7 @@ app.post("/pelecard-callback", async (req, res) => {
                raw_response  = EXCLUDED.raw_response`,
           [
             regId,
-            r?.fa_response_id || null,
+            extId || null,
             "approved",
             amountMinor || 0,
             summitDocId,
