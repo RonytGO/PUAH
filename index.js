@@ -1,7 +1,8 @@
 const express = require("express");
 const fetch = require("node-fetch");
 const bodyParser = require("body-parser");
-const { pool } = require("./db");
+const fs = require("fs").promises; // Use async file system operations
+const path = require("path");
 
 const app = express();
 
@@ -9,7 +10,7 @@ const app = express();
 app.use(bodyParser.text({ type: "*/*" }));
 app.use(bodyParser.json());
 
-// --- minimal helpers (no fancy amount transforms) ---
+/* ----------------------- helpers (unchanged) ----------------------- */
 const toInt = (v) => {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
@@ -18,7 +19,6 @@ const toInt = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-// Amount (minor units): prefer DebitTotal, else *Minor, else Total (digits-only → minor)
 const getAmountMinor = (rd) => {
   const cand = [rd.DebitTotal, rd.TotalMinor, rd.AmountMinor, rd.Total];
   for (const c of cand) {
@@ -28,7 +28,6 @@ const getAmountMinor = (rd) => {
   return 0;
 };
 
-// Installments: common fields; fallback to first number in JParam; else 1
 const getPayments = (rd) => {
   for (const f of ["TotalPayments", "NumberOfPayments", "Payments", "PaymentsNum"]) {
     const n = toInt(rd[f]);
@@ -44,41 +43,54 @@ const getPayments = (rd) => {
   return 1;
 };
 
-// --- unwrap Summit envelope { Data: {...}, Status, ... } ---
 const unwrapSummit = (obj) => (obj && typeof obj === "object" && obj.Data ? obj.Data : obj || {});
 
-// --- NEW: robust ParamX/AdditionalDetailsParamX parsing ---
 const extractRegId = (rd) => {
   const raw = String(rd.AdditionalDetailsParamX || rd.ParamX || "").trim();
   if (!raw) return "";
-  if (!raw.includes("|")) return raw;                // supports ParamX="<RegID>"
-  const parts = raw.split("|").filter(Boolean);     // supports "ML|<RegID>"
+  if (!raw.includes("|")) return raw;
+  const parts = raw.split("|").filter(Boolean);
   return parts[1] || parts[0] || "";
 };
 
-// Non-blocking DB check
-(async () => {
-  try {
-    const { rows } = await pool.query("SELECT 1 AS ok");
-    console.log("DB connected at startup:", rows[0]);
-  } catch (e) {
-    console.error("DB check failed at startup:", e.message);
-  }
-})();
+/* ------------------- In-memory storage for receipts ------------------- */
+// REMOVED IN FAVOR OF FILE-BASED STORAGE
+const RECEIPTS_DIR = path.join(__dirname, "receipts");
 
-app.get("/db-ping", async (_req, res) => {
+const writeReceipt = async (regId, url) => {
   try {
-    const { rows } = await pool.query("SELECT now() AS ts");
-    res.json(rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+    await fs.mkdir(RECEIPTS_DIR, { recursive: true });
+    await fs.writeFile(path.join(RECEIPTS_DIR, `${regId}.json`), JSON.stringify({ url }));
+  } catch (err) {
+    console.error(`Failed to write receipt for ${regId}:`, err);
   }
+};
+
+const readReceipt = async (regId) => {
+  try {
+    const data = await fs.readFile(path.join(RECEIPTS_DIR, `${regId}.json`), "utf8");
+    const { url } = JSON.parse(data);
+    return url;
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      console.error(`Failed to read receipt for ${regId}:`, err);
+    }
+    return "";
+  }
+};
+
+
+/* --------------------- Routes & main logic --------------------- */
+
+// simple ping (no DB)
+app.get("/db-ping", (_req, res) => {
+  res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-// 1) INIT PAYMENT (store registration; redirect to Pelecard)
+// 1) INIT PAYMENT (store registration info only in logs)
 app.get("/", async (req, res) => {
   const {
-    total = "6500", // expect minor units; pass-through to Pelecard
+    total = "6500",
     RegID = "",
     FAResponseID = "",
     CustomerName = "",
@@ -86,6 +98,11 @@ app.get("/", async (req, res) => {
     phone = "",
     Course = ""
   } = req.query;
+
+  // log registration data
+  console.log("Registration received:", {
+    RegID, FAResponseID, CustomerName, CustomerEmail, phone, Course, total
+  });
 
   const paramX = `${RegID}`;
   const baseCallback = `https://${req.get("host")}/callback`;
@@ -99,24 +116,6 @@ app.get("/", async (req, res) => {
     `&phone=${encodeURIComponent(phone)}` +
     `&Course=${encodeURIComponent(Course)}` +
     `&Total=${encodeURIComponent(total)}`;
-
-  try {
-    await pool.query(
-      `INSERT INTO registrations (reg_id, fa_response_id, customer_name, customer_email, phone, course, total)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (reg_id) DO UPDATE
-       SET fa_response_id = EXCLUDED.fa_response_id,
-           customer_name  = EXCLUDED.customer_name,
-           customer_email = EXCLUDED.customer_email,
-           phone          = EXCLUDED.phone,
-           course         = EXCLUDED.course,
-           total          = EXCLUDED.total,
-           updated_at     = now()`,
-      [RegID, FAResponseID, CustomerName, CustomerEmail, phone, Course, total]
-    );
-  } catch (e) {
-    console.error("registrations upsert failed:", e);
-  }
 
   const payload = {
     terminal: process.env.PELE_TERMINAL,
@@ -133,7 +132,7 @@ app.get("/", async (req, res) => {
     NotificationErrorMail: "ronyt@puah.org.il",
     ServerSideGoodFeedbackURL: serverCallback,
     ServerSideErrorFeedbackURL: serverCallback,
-    ParamX: paramX, // plain RegID is OK; webhook now handles both formats
+    ParamX: paramX,
     MaxPayments: "10",
     MinPayments: "1"
   };
@@ -152,7 +151,7 @@ app.get("/", async (req, res) => {
   }
 });
 
-// 2) PELECARD WEBHOOK (create + email Summit doc; store ReceiptURL)
+// 2) PELECARD WEBHOOK
 app.post("/pelecard-callback", async (req, res) => {
   try {
     // Normalize body
@@ -162,221 +161,106 @@ app.post("/pelecard-callback", async (req, res) => {
     } else {
       const raw = String(req.body || "")
         .replace(/'/g, '"')
-        .replace(/ResultData\s*:\s*\[([^[\]]+?)\]/g, 'ResultData:{$1}');
+        .replace(/ResultData\s*:\s*\[([^\[\]]+?)\]/g, 'ResultData:{$1}');
       bodyObj = JSON.parse(raw);
     }
     const rd = bodyObj.ResultData || bodyObj.Result || bodyObj;
 
-    // FIX: support "ML|<RegID>" and "<RegID>"
     const regId = extractRegId(rd);
     const txId = rd.TransactionId || null;
     const shva = rd.ShvaResult || rd.StatusCode || "";
     const status = (shva === "000" || shva === "0") ? "approved" : "failed";
 
-    // Use Pelecard amount (minor) + payments as-is
     let amountMinor = getAmountMinor(rd);
-    if (!amountMinor || amountMinor <= 0) {
-      try {
-        const { rows } = await pool.query(`SELECT total FROM registrations WHERE reg_id = $1 LIMIT 1`, [regId]);
-        const faMinor = toInt(rows[0]?.total);
-        if (faMinor && faMinor > 0) amountMinor = faMinor;
-      } catch (e) {
-        console.error("fallback amount query failed:", e.message);
-      }
-    }
-    
     const payments = Math.max(1, getPayments(rd) || 1);
-
-
     const last4 = (rd.CreditCardNumber || "").split("*").pop() || "0000";
     const errorMsg = rd.ErrorMessage || bodyObj.ErrorMessage || rd.StatusMessage || "";
 
-    // Audit webhook
-    await pool.query(
-      `INSERT INTO callback_events (reg_id, kind, raw_payload, headers)
-       VALUES ($1,$2,$3,$4)`,
-      [regId || null, "pelecard_server", bodyObj, req.headers]
-    );
-
-    // Upsert payment attempt
-    if (txId) {
-      await pool.query(
-        `INSERT INTO payment_attempts
-           (reg_id, status, amount_minor, total_payments, last4,
-            pelecard_transaction_id, shva_result, approve_number, confirmation_key,
-            error_message, raw_payload)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (pelecard_transaction_id) DO UPDATE
-         SET status = EXCLUDED.status,
-             amount_minor = EXCLUDED.amount_minor,
-             total_payments = EXCLUDED.total_payments,
-             last4 = EXCLUDED.last4,
-             shva_result = EXCLUDED.shva_result,
-             approve_number = EXCLUDED.approve_number,
-             confirmation_key = EXCLUDED.confirmation_key,
-             error_message = EXCLUDED.error_message,
-             raw_payload = EXCLUDED.raw_payload`,
-        [
-          regId, status, amountMinor || 0, payments, last4,
-          txId, shva || null, rd.DebitApproveNumber || rd.ApproveNumber || null,
-          rd.ConfirmationKey || null, errorMsg || null, bodyObj
-        ]
-      );
-    }
+    // Log webhook payload
+    console.log("Pelecard webhook:", { regId, txId, status, amountMinor, payments, last4, shva, errorMsg });
 
     // Create + email (approved only)
     if (txId && status === "approved") {
-      // Idempotency
-      const { rows: existing } = await pool.query(
-        `SELECT summit_doc_id FROM summit_documents WHERE pelecard_transaction_id = $1 LIMIT 1`,
-        [txId]
-      );
-      let summitDocId = existing[0]?.summit_doc_id || null;
+      const name    = (rd.CustomerName || "Unknown").trim();
+      const emailTo = (rd.CustomerEmail || "unknown@puah.org.il").trim();
+      const extId   = (rd.FAResponseID || "").toString();
+      const courseRaw = (rd.Course || "קורס");
+      const courseClean = courseRaw.replace(/^[\\(]+|[\\)]+$/g, "") || "קורס";
+      const amount = amountMinor / 100;
 
-      if (!summitDocId) {
-        // Registration details (email, name, course, FA external id)
-        let r = {};
-        if (regId) {
-          const { rows: regRows } = await pool.query(
-            `SELECT fa_response_id, customer_name, customer_email, phone, course, total
-             FROM registrations WHERE reg_id = $1 LIMIT 1`,
-            [regId]
-          );
-          r = regRows[0] || {};
-        }
-
-        // --- NEW: robust fallbacks so data can't be blank if rd has it ---
-        const name    = (r?.customer_name || rd.CustomerName || "Unknown").trim();
-        const emailTo = (r?.customer_email || rd.CustomerEmail || "unknown@puah.org.il").trim();
-        const extId   = (r?.fa_response_id || rd.FAResponseID || "").toString();
-        const courseRaw = (r?.course || rd.Course || "קורס");
-        const courseClean = (courseRaw || "").replace(/^[\(]+|[\)]+$/g, "") || "קורס";
-
-        // Major units for Summit once
-        const amount = (amountMinor || toInt(r?.total) || 0) / 100;
-
-        // ---- SUMMIT CREATE with SendByEmail ----
-        const summitPayload = {
-          Details: {
-            Date: new Date().toISOString(),
-            Customer: {
-              ExternalIdentifier: extId,
-              Name: name,
-              EmailAddress: emailTo
-            },
-            SendByEmail: emailTo
-              ? { EmailAddress: emailTo, Original: true, SendAsPaymentRequest: false }
-              : undefined,
-            Type: 1, // approved
-            Comments: `Pelecard Status: approved | Transaction: ${txId}`,
-            ExternalReference: regId || txId
-          },
-          Items: [{
-            Quantity: 1,
-            UnitPrice: amount,
-            TotalPrice: amount,
-            Item: { Name: courseClean }
-          }],
-          Payments: [{
-            Amount: amount,      // major units (e.g., 49.00 -> 49)
-            Type: 5,             // credit card
-            Details_CreditCard: {
-              Last4Digits: last4,
-              Payments: payments // <-- correct key (NOT NumberOfPayments)
-            }
-            }],
-
-          VATIncluded: true,
-          Credentials: {
-            CompanyID: parseInt(process.env.SUMMIT_COMPANY_ID, 10),
-            APIKey: process.env.SUMMIT_API_KEY
+      const summitPayload = {
+        Details: {
+          Date: new Date().toISOString(),
+          Customer: { ExternalIdentifier: extId, Name: name, EmailAddress: emailTo },
+          SendByEmail: emailTo
+            ? { EmailAddress: emailTo, Original: true, SendAsPaymentRequest: false }
+            : undefined,
+          Type: 1,
+          Comments: `Pelecard Status: approved | Transaction: ${txId}`,
+          ExternalReference: regId || txId
+        },
+        Items: [{
+          Quantity: 1,
+          UnitPrice: amount,
+          TotalPrice: amount,
+          Item: { Name: courseClean }
+        }],
+        Payments: [{
+          Amount: amount,
+          Type: 5,
+          Details_CreditCard: {
+            Last4Digits: last4,
+            Payments: payments
           }
-        };
-
-        // --- CREATE & UNWRAP { Data: {...} } ---
-        const summitRes = await fetch(
-          "https://app.sumit.co.il/accounting/documents/create/",
-          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(summitPayload) }
-        );
-
-        // keep full envelope for auditing, but use unwrapped Data to read fields
-        const summitEnvelopeRaw = await summitRes.text();
-        let summitEnvelope;
-        try {
-          summitEnvelope = JSON.parse(summitEnvelopeRaw);
-        } catch {
-          summitEnvelope = { raw: summitEnvelopeRaw };
+        }],
+        VATIncluded: true,
+        Credentials: {
+          CompanyID: parseInt(process.env.SUMMIT_COMPANY_ID, 10),
+          APIKey: process.env.SUMMIT_API_KEY
         }
-        const sd = unwrapSummit(summitEnvelope);
+      };
 
-        summitDocId = sd?.DocumentID || null;
-        const receiptUrl = sd?.DocumentDownloadURL || null;
+      const summitRes = await fetch(
+        "https://app.sumit.co.il/accounting/documents/create/",
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(summitPayload) }
+      );
 
-        // Persist (store full envelope; save receipt_url)
-        await pool.query(
-          `INSERT INTO summit_documents
-             (reg_id, fa_response_id, status, amount_minor, summit_doc_id, raw_response, pelecard_transaction_id, receipt_url)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-           ON CONFLICT (pelecard_transaction_id) DO UPDATE
-           SET summit_doc_id = COALESCE(summit_documents.summit_doc_id, EXCLUDED.summit_doc_id),
-               receipt_url   = COALESCE(summit_documents.receipt_url, EXCLUDED.receipt_url),
-               raw_response  = EXCLUDED.raw_response`,
-          [
-            regId,
-            extId || null,
-            "approved",
-            amountMinor || 0,
-            summitDocId,
-            summitEnvelope,   // full envelope for debugging
-            txId,
-            receiptUrl
-          ]
-        );
-
-        console.log("Summit create response (unwrapped):", {
-          DocumentID: summitDocId,
-          DocumentDownloadURL: receiptUrl
-        });
+      const summitEnvelopeRaw = await summitRes.text();
+      let summitEnvelope;
+      try {
+        summitEnvelope = JSON.parse(summitEnvelopeRaw);
+      } catch {
+        summitEnvelope = { raw: summitEnvelopeRaw };
       }
+      const sd = unwrapSummit(summitEnvelope);
+
+      const summitDocId = sd?.DocumentID || null;
+      const receiptUrl = sd?.DocumentDownloadURL || null;
+
+      // Store the receipt URL using the file-based persistence
+      if (regId && receiptUrl) await writeReceipt(regId, receiptUrl);
+
+      console.log("Summit create response:", {
+        DocumentID: summitDocId,
+        DocumentDownloadURL: receiptUrl
+      });
     }
 
     res.status(200).send("OK");
   } catch (err) {
     console.error("Pelecard Callback Error:", err);
-    // still 200 so Pelecard doesn't spam retries
-    res.status(200).send("OK");
+    res.status(200).send("OK"); // avoid retries
   }
 });
 
-// 3) CLIENT REDIRECT (no doc creation here) — includes ReceiptURL param if present
+// 3) CLIENT REDIRECT
 app.get("/callback", async (req, res) => {
   const { Status = "", RegID = "", FAResponseID = "", Total = "", phone = "", Course = "" } = req.query;
 
-  try {
-    await pool.query(
-      `INSERT INTO callback_events (reg_id, kind, raw_payload, headers)
-       VALUES ($1,$2,$3,$4)`,
-      [RegID || null, "client_redirect", req.query, req.headers]
-    );
-  } catch (e) {
-    console.error("callback_events insert (client_redirect) failed:", e);
-  }
+  console.log("Client redirect:", req.query);
 
-  // get latest receipt_url if exists
-  let receiptUrl = "";
-  try {
-    const { rows } = await pool.query(
-      `SELECT receipt_url
-       FROM summit_documents
-       WHERE reg_id = $1
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [RegID]
-    );
-    receiptUrl = rows[0]?.receipt_url || "";
-  } catch (e) {
-    console.error("fetch receipt_url failed:", e.message);
-  }
+  // Read the receipt URL from the file system
+  const receiptUrl = await readReceipt(RegID);
 
   const onward =
     `https://puah.tfaforms.net/17` +
