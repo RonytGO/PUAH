@@ -53,29 +53,27 @@ const extractRegId = (rd) => {
   return parts[1] || parts[0] || "";
 };
 
-/* ------------------- In-memory storage for receipts ------------------- */
-// REMOVED IN FAVOR OF FILE-BASED STORAGE
+/* ------------------- File-based storage for receipts and data ------------------- */
 const RECEIPTS_DIR = path.join(__dirname, "receipts");
 
-const writeReceipt = async (regId, url) => {
+const writeTransactionData = async (regId, data) => {
   try {
     await fs.mkdir(RECEIPTS_DIR, { recursive: true });
-    await fs.writeFile(path.join(RECEIPTS_DIR, `${regId}.json`), JSON.stringify({ url }));
+    await fs.writeFile(path.join(RECEIPTS_DIR, `${regId}.json`), JSON.stringify(data));
   } catch (err) {
-    console.error(`Failed to write receipt for ${regId}:`, err);
+    console.error(`Failed to write transaction data for ${regId}:`, err);
   }
 };
 
-const readReceipt = async (regId) => {
+const readTransactionData = async (regId) => {
   try {
     const data = await fs.readFile(path.join(RECEIPTS_DIR, `${regId}.json`), "utf8");
-    const { url } = JSON.parse(data);
-    return url;
+    return JSON.parse(data);
   } catch (err) {
     if (err.code !== "ENOENT") {
-      console.error(`Failed to read receipt for ${regId}:`, err);
+      console.error(`Failed to read transaction data for ${regId}:`, err);
     }
-    return "";
+    return {};
   }
 };
 
@@ -104,6 +102,10 @@ app.get("/", async (req, res) => {
     RegID, FAResponseID, CustomerName, CustomerEmail, phone, Course, total
   });
 
+  // Save all necessary data to a file
+  await writeTransactionData(RegID, { CustomerName, CustomerEmail, Course });
+
+  // Use only RegID for ParamX due to length limitations
   const paramX = `${RegID}`;
   const baseCallback = `https://${req.get("host")}/callback`;
   const serverCallback = `https://${req.get("host")}/pelecard-callback`;
@@ -179,12 +181,16 @@ app.post("/pelecard-callback", async (req, res) => {
     // Log webhook payload
     console.log("Pelecard webhook:", { regId, txId, status, amountMinor, payments, last4, shva, errorMsg });
 
+    // Read the data previously saved to a file
+    const savedData = await readTransactionData(regId);
+    
     // Create + email (approved only)
     if (txId && status === "approved") {
-      const name    = (rd.CustomerName || "Unknown").trim();
-      const emailTo = (rd.CustomerEmail || "unknown@puah.org.il").trim();
-      const extId   = (rd.FAResponseID || "").toString();
-      const courseRaw = (rd.Course || "קורס");
+      // Use the data from the file
+      const name    = (savedData.CustomerName || "Unknown").trim();
+      const emailTo = (savedData.CustomerEmail || "unknown@puah.org.il").trim();
+      const extId   = (savedData.FAResponseID || "").toString(); // This is still coming from Pelecard's direct response
+      const courseRaw = (savedData.Course || "קורס");
       const courseClean = courseRaw.replace(/^[\\(]+|[\\)]+$/g, "") || "קורס";
       const amount = amountMinor / 100;
 
@@ -237,8 +243,10 @@ app.post("/pelecard-callback", async (req, res) => {
       const summitDocId = sd?.DocumentID || null;
       const receiptUrl = sd?.DocumentDownloadURL || null;
 
-      // Store the receipt URL using the file-based persistence
-      if (regId && receiptUrl) await writeReceipt(regId, receiptUrl);
+      // Store the receipt URL with the original data
+      if (regId && receiptUrl) {
+        await writeTransactionData(regId, { ...savedData, receiptUrl });
+      }
 
       console.log("Summit create response:", {
         DocumentID: summitDocId,
@@ -260,7 +268,8 @@ app.get("/callback", async (req, res) => {
   console.log("Client redirect:", req.query);
 
   // Read the receipt URL from the file system
-  const receiptUrl = await readReceipt(RegID);
+  const savedData = await readTransactionData(RegID);
+  const receiptUrl = savedData.receiptUrl || "";
 
   const onward =
     `https://puah.tfaforms.net/17` +
