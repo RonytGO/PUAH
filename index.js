@@ -203,7 +203,8 @@ app.post("/pelecard-callback", async (req, res) => {
             : undefined,
           Type: 1,
           Comments: `Pelecard Status: approved | Transaction: ${txId}`,
-          ExternalReference: regId || txId
+          ExternalReference: regId || txId,
+          ClosingText:"לכל שאלה \\ בירור, ניתן לפנות אלינו בדוא\"ל לכתובת: hd@puah.org.il"
         },
         Items: [{
           Quantity: 1,
