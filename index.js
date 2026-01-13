@@ -115,7 +115,7 @@ app.post("/pelecard-callback", async (req, res) => {
     res.status(200).send(`
       <html><body>
       <script>
-        window.location = "https://puah.tfaforms.net/17?RegID=${encodeURIComponent(regId)}&Status=approved&Total=${encodeURIComponent(amount)}";
+        window.location = "https://puah.tfaforms.net/38?RegID=${encodeURIComponent(regId)}&Status=approved&Total=${encodeURIComponent(amount)}";
       </script>
       </body></html>
     `);
