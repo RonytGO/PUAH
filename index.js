@@ -130,8 +130,6 @@ app.get("/", async (req, res) => {
     Total: total,
     GoodURL: `${baseCallback}${commonQS}&Status=approved`,
     ErrorURL: `${baseCallback}${commonQS}&Status=failed`,
-    NotificationGoodMail: "ronyt@puah.org.il",
-    NotificationErrorMail: "ronyt@puah.org.il",
     ServerSideGoodFeedbackURL: serverCallback,
     ServerSideErrorFeedbackURL: serverCallback,
     ParamX: paramX,
