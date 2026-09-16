@@ -278,7 +278,9 @@ app.get("/callback", async (req, res) => {
     `&Status=${encodeURIComponent(Status)}` +
     `&phone=${encodeURIComponent(phone)}` +
     `&Course=${encodeURIComponent(Course)}` +
+    `&last4=${encodeURIComponent(last4)}` +
     `&ReceiptURL=${encodeURIComponent(receiptUrl)}`;
+  
 
   res.redirect(onward);
 });
