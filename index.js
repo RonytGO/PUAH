@@ -244,7 +244,7 @@ app.post("/pelecard-callback", async (req, res) => {
 
       // Store the receipt URL with the original data
       if (regId && receiptUrl) {
-        await writeTransactionData(regId, { ...savedData, receiptUrl });
+        await writeTransactionData(regId, { ...savedData, receiptUrl: receiptUrl || "", last4});
       }
 
       console.log("Summit create response:", {
@@ -269,6 +269,7 @@ app.get("/callback", async (req, res) => {
   // Read the receipt URL from the file system
   const savedData = await readTransactionData(RegID);
   const receiptUrl = savedData.receiptUrl || "";
+  const last4 = savedData.last4 || "";
 
   const onward =
     `https://puah.tfaforms.net/17` +
