@@ -89,9 +89,8 @@ const updateTransactionData = async (regId, patch) => {
 
 /* --------------------- Routes & main logic --------------------- */
 
-// simple ping (no DB)
-app.get("/db-ping", (_req, res) => {
-  res.json({ ok: true, ts: new Date().toISOString() });
+app.get("/version", (_req, res) => {
+  res.json({ version: "last4-fix-2026-11-01", revision: process.env.K_REVISION });
 });
 
 // 1) INIT PAYMENT
